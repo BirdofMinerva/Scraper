@@ -1,0 +1,22 @@
+
+# Playwright
+node_modules/
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/
+
+# Scraper output
+*.db
+*.db-wal
+*.db-shm
+*.jsonl
+
+# Dashboard runs (screenshots of signed-in sessions)
+/runs/
+
+# Proxy routes carry credentials in the URL
+proxies.txt
+*.env
+.env

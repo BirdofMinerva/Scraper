@@ -1,0 +1,28 @@
+{
+  "name": "scraper",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "npm run test:unit && npm run test:browser",
+    "test:unit": "node --import tsx --test test/browsers.test.ts test/storage.test.ts test/proxies.test.ts test/routes.test.ts test/detect.test.ts test/targets.test.ts test/accounts.test.ts test/login-sites.test.ts test/jobs.test.ts test/clean.test.ts test/actions.test.ts",
+    "test:browser": "node --import tsx --test --test-concurrency=1 test/missions.test.ts test/stack.test.ts test/stealth.test.ts test/crawl.test.ts test/turnstile.test.ts test/accounts-flow.test.ts test/server.test.ts",
+    "test:field": "node --import tsx field-test.ts",
+    "stack": "node --import tsx stack.ts",
+    "dash": "node --import tsx server.ts",
+    "clean": "node --import tsx clean.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^26.4.0",
+    "tsx": "^4.23.12"
+  },
+  "dependencies": {
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  }
+}

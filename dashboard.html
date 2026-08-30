@@ -1,0 +1,871 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scraper</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #161922; --panel-2: #1c2029; --line: #262b36;
+    --text: #d9dee7; --dim: #8b93a3; --faint: #5c6472;
+    --scrape: #4fc3f7; --bot: #ffb74d; --good: #7ddb8f; --warn: #ffcc66; --bad: #ff7a7a;
+    --accent: var(--scrape);
+  }
+  body.mode-bot { --accent: var(--bot); }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+  }
+
+  header {
+    display: flex; align-items: center; gap: 16px; padding: 10px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--line); flex: none;
+  }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .3px; }
+  header h1 span { color: var(--accent); }
+
+  .modes { display: flex; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .modes button { background: none; border: 0; color: var(--dim); padding: 6px 16px; cursor: pointer; font: inherit; }
+  .modes button[aria-pressed="true"] { background: var(--accent); color: #0f1115; font-weight: 600; }
+
+  .grow { flex: 1; }
+  .status { color: var(--dim); font-size: 12px; }
+  .status b { color: var(--text); font-weight: 600; }
+
+  button.action {
+    font: inherit; padding: 6px 16px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
+  }
+  button.action.primary { background: var(--accent); border-color: var(--accent); color: #0f1115; font-weight: 600; }
+  button.action:disabled { opacity: .4; cursor: not-allowed; }
+
+  main { flex: 1; display: grid; grid-template-columns: minmax(340px, 420px) 1fr; min-height: 0; }
+  #settings { overflow-y: auto; border-right: 1px solid var(--line); background: var(--panel); padding: 14px; }
+  #right { display: flex; flex-direction: column; min-width: 0; }
+
+  fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 12px; padding: 12px; background: var(--panel-2); }
+  legend { color: var(--accent); font-size: 11px; text-transform: uppercase; letter-spacing: .8px; padding: 0 6px; }
+  label { display: block; margin-bottom: 9px; color: var(--dim); font-size: 12px; }
+  label > span.hint { display: block; color: var(--faint); font-size: 11px; margin-top: 2px; }
+  input, select, textarea {
+    width: 100%; margin-top: 3px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 5px; padding: 6px 8px; font: inherit;
+  }
+  textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; resize: vertical; }
+  input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  .check { display: flex; align-items: center; gap: 8px; color: var(--dim); }
+  .check input { width: auto; margin: 0; }
+
+  table.fields { width: 100%; border-collapse: collapse; }
+  table.fields th { color: var(--faint); font-size: 11px; text-align: left; font-weight: 500; padding-bottom: 4px; }
+  table.fields td { padding: 2px 2px 2px 0; }
+  table.fields input { margin: 0; }
+  .mini { background: var(--panel); border: 1px solid var(--line); color: var(--dim);
+          border-radius: 5px; cursor: pointer; font: inherit; padding: 4px 9px; }
+  .mini:hover { color: var(--text); border-color: var(--accent); }
+
+  #bar { height: 3px; background: var(--panel-2); flex: none; }
+  #bar div { height: 100%; width: 0; background: var(--accent); transition: width .25s; }
+
+  #chips { display: flex; gap: 8px; flex-wrap: wrap; padding: 10px 14px; border-bottom: 1px solid var(--line); flex: none; min-height: 43px; }
+  .chip { background: var(--panel-2); border: 1px solid var(--line); border-radius: 20px; padding: 2px 11px; font-size: 12px; color: var(--dim); }
+  .chip b { color: var(--text); font-weight: 600; }
+
+  #termbar { display: flex; align-items: center; gap: 10px; padding: 6px 14px; border-bottom: 1px solid var(--line); flex: none; }
+  #termbar span { color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: .8px; }
+
+  #terminal {
+    flex: 1; overflow-y: auto; padding: 10px 14px; background: #0b0d11; min-height: 120px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.55;
+  }
+  #terminal div { white-space: pre-wrap; word-break: break-word; }
+  #terminal .t { color: var(--faint); }
+  .l-info { color: #a9b2c3; } .l-step { color: var(--accent); } .l-good { color: var(--good); }
+  .l-warn { color: var(--warn); } .l-error { color: var(--bad); }
+  #terminal.errors-only div:not(.l-error):not(.l-warn) { display: none; }
+
+  #results { flex: none; max-height: 34%; overflow: auto; border-top: 1px solid var(--line); background: var(--panel); }
+  #results table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #results th { position: sticky; top: 0; background: var(--panel-2); color: var(--faint);
+                text-align: left; font-weight: 500; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+  #results td { padding: 5px 10px; border-bottom: 1px solid var(--line); color: var(--text);
+                max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #results .empty { color: var(--faint); padding: 10px 14px; }
+
+  #history { flex: none; border-top: 1px solid var(--line); background: var(--panel); max-height: 118px; overflow-y: auto; }
+  #history div { padding: 5px 14px; border-bottom: 1px solid var(--line); cursor: pointer; color: var(--dim); font-size: 12px; }
+  #history div:hover { background: var(--panel-2); color: var(--text); }
+  #history .s-done { border-left: 2px solid var(--good); }
+  #history .s-failed { border-left: 2px solid var(--bad); }
+  #history .s-stopped { border-left: 2px solid var(--warn); }
+  #history .s-running { border-left: 2px solid var(--accent); }
+
+  .step { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .step select, .step input { margin: 0; }
+  .step select.s-do { flex: 0 0 82px; }
+  /* The two text fields share what is left, so a step with no target - a
+     visit, a screenshot - gives its space to the field that has something
+     in it rather than sitting half-width. */
+  .step input.s-target, .step input.s-value { flex: 1 1 0; min-width: 0; }
+  .step .grip { color: var(--faint); cursor: grab; user-select: none; }
+  .step .check { flex: none; }
+  .step button { flex: none; }
+
+  #shots { display: flex; gap: 8px; flex-wrap: wrap; padding: 10px 14px; }
+  #shots figure { margin: 0; width: 176px; }
+  #shots img { width: 100%; border: 1px solid var(--line); border-radius: 4px; cursor: zoom-in; background: #000; }
+  #shots figcaption { color: var(--faint); font-size: 11px; margin-top: 3px; word-break: break-all; }
+  #viewer { position: fixed; inset: 0; background: rgba(8,10,14,.92); display: flex; align-items: center;
+            justify-content: center; z-index: 20; cursor: zoom-out; padding: 24px; }
+  #viewer img { max-width: 100%; max-height: 100%; border: 1px solid var(--line); border-radius: 6px; }
+  #viewer span { position: absolute; top: 14px; left: 16px; color: var(--dim); font-size: 12px; }
+
+  .tabs { display: flex; gap: 2px; padding: 0 14px; border-bottom: 1px solid var(--line); flex: none; }
+  .tabs button { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--dim);
+                 font: inherit; font-size: 12px; padding: 6px 10px; cursor: pointer; }
+  .tabs button[aria-pressed="true"] { color: var(--text); border-bottom-color: var(--accent); }
+
+  .error-banner { background: #3a1c1c; border: 1px solid #6b2b2b; color: #ffb0b0;
+                  padding: 8px 10px; border-radius: 6px; margin-bottom: 12px; font-size: 12px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body class="mode-scrape">
+
+<header>
+  <h1>Scraper <span>dashboard</span></h1>
+  <div class="modes" role="group" aria-label="Mode">
+    <button id="tab-scrape" aria-pressed="true">Scrape</button>
+    <button id="tab-bot" aria-pressed="false">Bot</button>
+  </div>
+  <div class="grow"></div>
+  <div class="status" id="status">idle</div>
+  <button class="action" id="stop" disabled>Stop</button>
+  <button class="action primary" id="start">Start run</button>
+</header>
+
+<main>
+  <form id="settings" autocomplete="off" onsubmit="return false">
+    <div class="error-banner" id="formError" hidden></div>
+
+    <!-- ---------------------------------------------------------------- -->
+    <div id="pane-scrape">
+      <fieldset>
+        <legend>Pages</legend>
+        <label>Start URLs, one per line
+          <textarea name="urls" rows="3" placeholder="https://www.scrapingcourse.com/ecommerce/"></textarea>
+        </label>
+        <label>Numbered range
+          <span class="hint">{n} is replaced with each number. Added to the URLs above.</span>
+          <input name="rangePattern" placeholder="https://site/list?page={n}">
+        </label>
+        <div class="row">
+          <label>from <input name="rangeFrom" type="number" value="1" min="0"></label>
+          <label>to <input name="rangeTo" type="number" value="10" min="0"></label>
+          <label>max pages <input name="maxPages" type="number" placeholder="all" min="1"></label>
+        </div>
+        <label>Follow links matching
+          <span class="hint">Optional. Discovered URLs join the same queue.</span>
+          <input name="follow" placeholder="#pagination-container a">
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Extract</legend>
+        <label>Repeating row
+          <input name="rowSelector" placeholder=".product-item">
+        </label>
+        <table class="fields">
+          <thead><tr><th>field</th><th>selector inside row</th><th>attribute</th><th></th></tr></thead>
+          <tbody id="fieldRows"></tbody>
+        </table>
+        <button type="button" class="mini" id="addField">+ field</button>
+        <label style="margin-top:10px">Deduplicate on field
+          <span class="hint">Rows repeating this value are dropped.</span>
+          <input name="key" placeholder="name">
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Browsers</legend>
+        <div class="row">
+          <label>how many <input name="browsers" type="number" value="3" min="1" max="30"></label>
+          <label>kind <select name="kind"></select></label>
+          <label>engine <select name="engine"><option value="">any</option></select></label>
+        </div>
+        <div class="row">
+          <label>host delay ms <input name="perHostDelayMs" type="number" value="250" min="0"></label>
+          <label>retries <input name="retries" type="number" value="2" min="0"></label>
+          <label>timeout ms <input name="timeout" type="number" value="45000" min="1000"></label>
+        </div>
+        <label>Proxy routes — one per browser
+          <span class="hint">label=url per line, hops separated by &gt;. Fewer routes than browsers is refused.</span>
+          <textarea name="proxies" rows="3" placeholder="home=socks5://127.0.0.1:1080&#10;vps=http://user:pass@1.2.3.4:8080&#10;deep=http://a:8080>http://b:3128"></textarea>
+        </label>
+        <div class="hint" id="routeCount" style="color:var(--faint);margin:-4px 0 8px"></div>
+        <label class="check"><input type="checkbox" name="verifyExitIps"> Check each route's exit IP before starting</label>
+        <label class="check"><input type="checkbox" name="allowSharedProxies"> Let browsers share a route</label>
+        <label class="check"><input type="checkbox" name="challenge" checked> Pass Cloudflare challenges automatically</label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Store</legend>
+        <div class="row">
+          <label>SQLite file <input name="storePath" value="dashboard.db"></label>
+          <label>table <input name="storeTable" value="rows"></label>
+        </div>
+        <span class="hint">Leave the file empty to keep results in memory only.</span>
+      </fieldset>
+    </div>
+
+    <!-- ---------------------------------------------------------------- -->
+    <div id="pane-bot" hidden>
+      <fieldset>
+        <legend>What the browsers do</legend>
+        <label>Action
+          <select name="action">
+            <option value="list">Sign in — from the credential list below</option>
+            <option value="preset">Sign in — the preset's published demo login (shared by every browser)</option>
+            <option value="signin">Sign in — accounts on file in the book</option>
+            <option value="create">Create an account per browser</option>
+            <option value="ensure">Sign in, or register if this browser has none</option>
+          </select>
+        </label>
+        <label>Preconfigured site
+          <span class="hint">Fills the fields below from the shipped catalogue.</span>
+          <select name="preset"><option value="">— describe it by hand —</option></select>
+        </label>
+        <div id="presetNote" class="hint" style="color:var(--faint);margin:-4px 0 10px"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Site</legend>
+        <label>Name <input name="siteName" placeholder="demo"></label>
+        <label>Login URL <input name="loginUrl" placeholder="https://site/login"></label>
+        <label>Signup URL <span class="hint">Needed to create accounts.</span>
+          <input name="signupUrl" placeholder="https://site/register"></label>
+        <label>Checkboxes to tick <span class="hint">Terms, age gates. Comma separated selectors.</span>
+          <input name="accept" placeholder="#terms"></label>
+        <label>Signed in when the URL contains
+          <span class="hint">Only for sites with no sign-out link to find.</span>
+          <input name="signedInUrlIncludes" placeholder="/dashboard"></label>
+        <div class="row">
+          <label>email field <input name="fieldEmail" placeholder="auto"></label>
+          <label>password field <input name="fieldPassword" placeholder="auto"></label>
+          <label>submit <input name="submitLogin" placeholder="auto"></label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Login list</legend>
+        <label>One account per browser
+          <span class="hint">user:pass per line. # comments ignored. Browser 1 takes line 1.</span>
+          <textarea name="credentials" rows="6" placeholder="tomsmith:SuperSecretPassword!&#10;practice:SuperSecretPassword!"></textarea>
+        </label>
+        <div class="hint" id="credCount" style="color:var(--faint)"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Accounts</legend>
+        <div class="row">
+          <label>Account book <input name="bookPath" value="accounts.db"></label>
+          <label>Email domain <span class="hint">For generated identities.</span>
+            <input name="domain" placeholder="example.com"></label>
+        </div>
+        <button type="button" class="mini" id="viewAccounts">Show accounts on file</button>
+      </fieldset>
+
+      <fieldset>
+        <legend>Once signed in</legend>
+        <span class="hint" style="display:block;margin-bottom:6px">
+          Each browser runs these in order, on its own session. Clicks travel, typing has
+          per-key timing, and a challenge appearing mid-way is passed.
+        </span>
+        <div id="stepRows"></div>
+        <div class="row" style="margin-top:6px">
+          <button type="button" class="mini" id="addStep">+ step</button>
+          <button type="button" class="mini" id="exampleSteps">example</button>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Browsers</legend>
+        <div class="row">
+          <label>how many <input name="botBrowsers" type="number" value="3" min="1" max="30"></label>
+          <label>kind <select name="botKind"></select></label>
+          <label>engine <select name="botEngine"><option value="">any</option></select></label>
+        </div>
+        <div class="row">
+          <label>stagger from ms <input name="staggerFrom" type="number" value="500" min="0"></label>
+          <label>to ms <input name="staggerTo" type="number" value="4000" min="0"></label>
+        </div>
+        <label>Proxy routes — one per browser
+          <span class="hint">An IP each as well as a fingerprint each: one account per address.</span>
+          <textarea name="botProxies" rows="3" placeholder="home=socks5://127.0.0.1:1080&#10;vps=http://user:pass@1.2.3.4:8080"></textarea>
+        </label>
+        <div class="hint" id="botRouteCount" style="color:var(--faint);margin:-4px 0 8px"></div>
+        <label class="check"><input type="checkbox" name="botVerifyExitIps"> Check each route's exit IP before starting</label>
+        <label class="check"><input type="checkbox" name="botAllowSharedProxies"> Let browsers share a route</label>
+        <label class="check"><input type="checkbox" name="botChallenge" checked> Pass Cloudflare challenges automatically</label>
+      </fieldset>
+    </div>
+  </form>
+
+  <section id="right">
+    <div id="bar"><div id="barFill"></div></div>
+    <div id="chips"></div>
+
+    <div id="termbar">
+      <span>Output</span>
+      <div class="grow"></div>
+      <label class="check"><input type="checkbox" id="onlyErrors"> errors only</label>
+      <label class="check"><input type="checkbox" id="follow" checked> follow</label>
+      <button class="mini" id="clearTerm">clear</button>
+    </div>
+    <div id="terminal"></div>
+
+    <div class="tabs" id="viewTabs">
+      <button id="tab-results" aria-pressed="true">Results</button>
+      <button id="tab-shots" aria-pressed="false">Screenshots <span id="shotCount"></span></button>
+    </div>
+    <div id="results"><div class="empty">Results appear here when a run finishes.</div></div>
+    <div id="shots" hidden></div>
+    <div id="history"></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var form = $("settings");
+  var terminal = $("terminal");
+  var stream = null;
+  var currentRun = null;
+  var mode = "scrape";
+
+  // ---- terminal ----------------------------------------------------------
+  function clock(at) {
+    var d = new Date(at);
+    return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0") +
+           ":" + String(d.getSeconds()).padStart(2, "0");
+  }
+  function write(line) {
+    var el = document.createElement("div");
+    el.className = "l-" + line.level;
+    el.innerHTML = '<span class="t">' + clock(line.at) + "</span>  ";
+    el.appendChild(document.createTextNode(line.message));
+    terminal.appendChild(el);
+    // Bounded, or a long crawl turns the tab into a memory leak.
+    while (terminal.childElementCount > 3000) terminal.removeChild(terminal.firstChild);
+    if ($("follow").checked) terminal.scrollTop = terminal.scrollHeight;
+  }
+  $("clearTerm").onclick = function () { terminal.textContent = ""; };
+  $("onlyErrors").onchange = function () { terminal.classList.toggle("errors-only", this.checked); };
+
+  function setChips(stats) {
+    var box = $("chips");
+    box.textContent = "";
+    Object.keys(stats).forEach(function (name) {
+      var chip = document.createElement("span");
+      chip.className = "chip";
+      chip.innerHTML = name + " <b>" + String(stats[name]) + "</b>";
+      box.appendChild(chip);
+    });
+  }
+  function setProgress(p) {
+    var pct = p && p.total ? Math.min(100, Math.round((p.done / p.total) * 100)) : (p && p.done ? 100 : 0);
+    $("barFill").style.width = pct + "%";
+  }
+  function setStatus(text, running) {
+    $("status").innerHTML = text;
+    $("start").disabled = !!running;
+    $("stop").disabled = !running;
+  }
+
+  var currentShots = [];
+
+  function showShots(id, names) {
+    currentShots = names || [];
+    var box = $("shots");
+    box.textContent = "";
+    $("shotCount").textContent = currentShots.length ? "(" + currentShots.length + ")" : "";
+
+    if (!currentShots.length) {
+      box.innerHTML = '<div class="empty" style="color:var(--faint);padding:4px">' +
+        'No screenshots. Add a <b>shot</b> step to a bot run to see what each browser was looking at.</div>';
+      return;
+    }
+    currentShots.forEach(function (name) {
+      var url = "/api/runs/" + id + "/shots/" + encodeURIComponent(name);
+      var figure = document.createElement("figure");
+      var img = document.createElement("img");
+      img.src = url;
+      img.alt = name;
+      img.loading = "lazy";
+      img.onclick = function () { openViewer(url, name); };
+      var caption = document.createElement("figcaption");
+      caption.textContent = name;
+      figure.appendChild(img);
+      figure.appendChild(caption);
+      box.appendChild(figure);
+    });
+  }
+
+  function openViewer(url, name) {
+    var viewer = document.createElement("div");
+    viewer.id = "viewer";
+    var img = document.createElement("img");
+    img.src = url;
+    var label = document.createElement("span");
+    label.textContent = name;
+    viewer.appendChild(label);
+    viewer.appendChild(img);
+    viewer.onclick = function () { viewer.remove(); };
+    document.addEventListener("keydown", function escape(e) {
+      if (e.key !== "Escape") return;
+      viewer.remove();
+      document.removeEventListener("keydown", escape);
+    });
+    document.body.appendChild(viewer);
+  }
+
+  function setView(which) {
+    $("tab-results").setAttribute("aria-pressed", String(which === "results"));
+    $("tab-shots").setAttribute("aria-pressed", String(which === "shots"));
+    $("results").hidden = which !== "results";
+    $("shots").hidden = which !== "shots";
+  }
+  $("tab-results").onclick = function () { setView("results"); };
+  $("tab-shots").onclick = function () { setView("shots"); };
+
+  function showRows(rows) {
+    var box = $("results");
+    box.textContent = "";
+    if (!rows || !rows.length) {
+      box.innerHTML = '<div class="empty">No rows.</div>';
+      return;
+    }
+    var columns = Object.keys(rows[0]);
+    var table = document.createElement("table");
+    var head = table.insertRow();
+    columns.forEach(function (c) {
+      var th = document.createElement("th");
+      th.textContent = c;
+      head.appendChild(th);
+    });
+    rows.forEach(function (row) {
+      var tr = table.insertRow();
+      columns.forEach(function (c) {
+        var td = tr.insertCell();
+        td.textContent = row[c] === null || row[c] === undefined ? "" : String(row[c]);
+        td.title = td.textContent;
+      });
+    });
+    box.appendChild(table);
+  }
+
+  // ---- fields table ------------------------------------------------------
+  function addFieldRow(field) {
+    var tr = document.createElement("tr");
+    tr.innerHTML =
+      '<td><input class="f-name" placeholder="name"></td>' +
+      '<td><input class="f-sel" placeholder=".product-name"></td>' +
+      '<td><input class="f-attr" placeholder="text"></td>' +
+      '<td><button type="button" class="mini">×</button></td>';
+    tr.querySelector("button").onclick = function () { tr.remove(); };
+    if (field) {
+      tr.querySelector(".f-name").value = field.name || "";
+      tr.querySelector(".f-sel").value = field.selector || "";
+      tr.querySelector(".f-attr").value = field.attribute || "";
+    }
+    $("fieldRows").appendChild(tr);
+  }
+  $("addField").onclick = function () { addFieldRow(); };
+
+  // The shape of each action: which inputs it needs, and what to call them.
+  var STEPS = {
+    visit:  { target: null, value: { key: "url", placeholder: "https://site/page", wide: true } },
+    click:  { target: { key: "selector", placeholder: "#add-to-cart" }, value: null },
+    type:   { target: { key: "selector", placeholder: "#search" }, value: { key: "text", placeholder: "what to type" } },
+    scroll: { target: null, value: { key: "steps", placeholder: "3", number: true } },
+    wait:   { target: { key: "selector", placeholder: "#done (optional)" }, value: { key: "ms", placeholder: "1000", number: true } },
+    read:   { target: { key: "selector", placeholder: ".price" }, value: { key: "name", placeholder: "column name" } },
+    shot:   { target: null, value: { key: "label", placeholder: "label (optional)" } },
+  };
+
+  function addStepRow(step) {
+    step = step || { do: "visit" };
+    var tr = document.createElement("div");
+    tr.className = "step";
+    tr.innerHTML =
+      '<span class="grip" title="drag to reorder" draggable="true">⋮⋮</span>' +
+      '<select class="s-do"></select>' +
+      '<input class="s-target">' +
+      '<input class="s-value">' +
+      '<label class="check" title="carry on if this step fails"><input type="checkbox" class="s-opt"></label>' +
+      '<button type="button" class="mini">×</button>';
+
+    var select = tr.querySelector(".s-do");
+    Object.keys(STEPS).forEach(function (kind) { select.appendChild(new Option(kind, kind)); });
+    select.value = step.do;
+
+    var target = tr.querySelector(".s-target");
+    var value = tr.querySelector(".s-value");
+
+    function shape() {
+      var spec = STEPS[select.value];
+      target.hidden = !spec.target;
+      target.placeholder = spec.target ? spec.target.placeholder : "";
+      value.hidden = !spec.value;
+      value.placeholder = spec.value ? spec.value.placeholder : "";
+      value.type = spec.value && spec.value.number ? "number" : "text";
+    }
+    select.onchange = function () { shape(); save(); };
+    shape();
+
+    target.value = step.selector || "";
+    value.value = step.url || step.text || step.name || step.label ||
+      (step.steps != null ? step.steps : "") || (step.ms != null ? step.ms : "") || "";
+    tr.querySelector(".s-opt").checked = !!step.optional;
+    tr.querySelector("button").onclick = function () { tr.remove(); save(); };
+
+    // Reordering matters here in a way it does not for extract fields: these
+    // run in sequence, and "click then read" is a different bot from
+    // "read then click".
+    var grip = tr.querySelector(".grip");
+    grip.addEventListener("dragstart", function (e) {
+      dragging = tr; e.dataTransfer.effectAllowed = "move";
+    });
+    tr.addEventListener("dragover", function (e) {
+      if (!dragging || dragging === tr) return;
+      e.preventDefault();
+      var rows = Array.prototype.slice.call($("stepRows").children);
+      var above = rows.indexOf(dragging) < rows.indexOf(tr);
+      $("stepRows").insertBefore(dragging, above ? tr.nextSibling : tr);
+    });
+    tr.addEventListener("drop", function (e) { e.preventDefault(); dragging = null; save(); });
+
+    $("stepRows").appendChild(tr);
+  }
+  var dragging = null;
+
+  $("addStep").onclick = function () { addStepRow(); save(); };
+  $("exampleSteps").onclick = function () {
+    $("stepRows").textContent = "";
+    [
+      { do: "visit", url: "https://www.saucedemo.com/inventory.html" },
+      { do: "click", selector: "#add-to-cart-sauce-labs-backpack" },
+      { do: "read", name: "cart", selector: ".shopping_cart_badge" },
+      { do: "shot", label: "cart" },
+    ].forEach(addStepRow);
+    save();
+  };
+
+  function readSteps() {
+    return Array.prototype.map.call($("stepRows").children, function (tr) {
+      var kind = tr.querySelector(".s-do").value;
+      var spec = STEPS[kind];
+      var step = { do: kind, optional: tr.querySelector(".s-opt").checked };
+      var target = tr.querySelector(".s-target").value.trim();
+      var value = tr.querySelector(".s-value").value.trim();
+      if (spec.target && target) step[spec.target.key] = target;
+      if (spec.value && value) step[spec.value.key] = spec.value.number ? Number(value) : value;
+      return step;
+    });
+  }
+
+  function readFields() {
+    return Array.prototype.map.call($("fieldRows").children, function (tr) {
+      return {
+        name: tr.querySelector(".f-name").value.trim(),
+        selector: tr.querySelector(".f-sel").value.trim() || undefined,
+        attribute: tr.querySelector(".f-attr").value.trim() || undefined,
+      };
+    }).filter(function (f) { return f.name; });
+  }
+
+  // ---- config ------------------------------------------------------------
+  var value = function (name) { return (form.elements[name] && form.elements[name].value || "").trim(); };
+  var num = function (name) { var v = value(name); return v === "" ? undefined : Number(v); };
+
+  function buildConfig() {
+    if (mode === "scrape") {
+      var config = {
+        mode: "scrape",
+        urls: value("urls").split(/\n+/).map(function (u) { return u.trim(); }).filter(Boolean),
+        rowSelector: value("rowSelector"),
+        fields: readFields(),
+        follow: value("follow") || undefined,
+        key: value("key") || undefined,
+        browsers: num("browsers"), kind: value("kind"), engine: value("engine") || undefined,
+        proxies: value("proxies") || undefined,
+        allowSharedProxies: form.elements.allowSharedProxies.checked,
+        verifyExitIps: form.elements.verifyExitIps.checked,
+        perHostDelayMs: num("perHostDelayMs"), retries: num("retries"),
+        maxPages: num("maxPages"), timeout: num("timeout"),
+        challenge: form.elements.challenge.checked,
+        store: value("storePath") ? { path: value("storePath"), table: value("storeTable") || "rows" } : undefined,
+      };
+      if (value("rangePattern")) {
+        config.range = { pattern: value("rangePattern"), from: num("rangeFrom") || 1, to: num("rangeTo") || 1 };
+      }
+      return config;
+    }
+
+    return {
+      mode: "bot",
+      action: value("action"),
+      preset: value("preset") || undefined,
+      site: value("preset") ? undefined : {
+        name: value("siteName"),
+        loginUrl: value("loginUrl"),
+        signupUrl: value("signupUrl") || undefined,
+        accept: value("accept") ? value("accept").split(",").map(function (s) { return s.trim(); }).filter(Boolean) : undefined,
+        signedInUrlIncludes: value("signedInUrlIncludes") || undefined,
+        fields: (value("fieldEmail") || value("fieldPassword")) ? {
+          email: value("fieldEmail") || undefined,
+          password: value("fieldPassword") || undefined,
+        } : undefined,
+        submit: value("submitLogin") ? { login: value("submitLogin") } : undefined,
+      },
+      credentials: value("credentials") || undefined,
+      actions: readSteps(),
+      browsers: num("botBrowsers"), kind: value("botKind"), engine: value("botEngine") || undefined,
+      proxies: value("botProxies") || undefined,
+      allowSharedProxies: form.elements.botAllowSharedProxies.checked,
+      verifyExitIps: form.elements.botVerifyExitIps.checked,
+      staggerMs: [num("staggerFrom") || 0, num("staggerTo") || 0],
+      challenge: form.elements.botChallenge.checked,
+      domain: value("domain") || undefined,
+      book: value("bookPath") ? { path: value("bookPath") } : undefined,
+    };
+  }
+
+  function save() {
+    try {
+      var data = {};
+      Array.prototype.forEach.call(form.elements, function (el) {
+        if (!el.name) return;
+        data[el.name] = el.type === "checkbox" ? el.checked : el.value;
+      });
+      data.__fields = readFields();
+      data.__steps = readSteps();
+      localStorage.setItem("scraper-dashboard", JSON.stringify({ mode: mode, form: data }));
+    } catch (e) { /* private window, or storage off - the form still works */ }
+  }
+  function restore() {
+    try {
+      var saved = JSON.parse(localStorage.getItem("scraper-dashboard") || "null");
+      if (!saved) return false;
+      Object.keys(saved.form || {}).forEach(function (name) {
+        var el = form.elements[name];
+        if (!el) return;
+        if (el.type === "checkbox") el.checked = saved.form[name];
+        else el.value = saved.form[name];
+      });
+      (saved.form.__fields || []).forEach(addFieldRow);
+      (saved.form.__steps || []).forEach(addStepRow);
+      if (saved.mode) setMode(saved.mode);
+      return true;
+    } catch (e) { return false; }
+  }
+  function countLines(text) {
+    return text.split(/\n+/).filter(function (l) {
+      var t = l.trim(); return t && t.indexOf("#") !== 0;
+    }).length;
+  }
+  function routeHint(field, browsersField, out) {
+    var routes = countLines(value(field) || "");
+    var browsers = num(browsersField) || 0;
+    if (!routes) { $(out).textContent = "no routes — every browser leaves from this machine's IP"; return; }
+    var short = routes < browsers;
+    $(out).textContent = routes + " route" + (routes === 1 ? "" : "s") + " for " + browsers + " browser" +
+      (browsers === 1 ? "" : "s") + (short ? " — two browsers would share an IP" : " — an IP each");
+    $(out).style.color = short ? "var(--warn)" : "var(--faint)";
+  }
+
+  form.addEventListener("input", function () {
+    save();
+    routeHint("proxies", "browsers", "routeCount");
+    routeHint("botProxies", "botBrowsers", "botRouteCount");
+    var n = value("credentials") ? value("credentials").split(/\n+/).filter(function (l) {
+      var t = l.trim(); return t && t.indexOf("#") !== 0;
+    }).length : 0;
+    $("credCount").textContent = n ? n + " credential" + (n === 1 ? "" : "s") : "";
+  });
+
+  // ---- mode --------------------------------------------------------------
+  function setMode(next) {
+    mode = next;
+    document.body.className = "mode-" + next;
+    $("tab-scrape").setAttribute("aria-pressed", String(next === "scrape"));
+    $("tab-bot").setAttribute("aria-pressed", String(next === "bot"));
+    $("pane-scrape").hidden = next !== "scrape";
+    $("pane-bot").hidden = next !== "bot";
+    save();
+  }
+  $("tab-scrape").onclick = function () { setMode("scrape"); };
+  $("tab-bot").onclick = function () { setMode("bot"); };
+
+  // ---- runs --------------------------------------------------------------
+  function listen(id) {
+    if (stream) stream.close();
+    currentRun = id;
+    stream = new EventSource("/api/runs/" + id + "/events");
+
+    stream.addEventListener("replay", function (e) {
+      var data = JSON.parse(e.data);
+      terminal.textContent = "";
+      data.log.forEach(write);
+      setChips(data.stats);
+      setProgress(data.progress);
+      setStatus("run <b>" + id + "</b> " + data.status, data.status === "running");
+    });
+    stream.addEventListener("log", function (e) { write(JSON.parse(e.data)); });
+    stream.addEventListener("stats", function (e) { setChips(JSON.parse(e.data)); });
+    stream.addEventListener("progress", function (e) { setProgress(JSON.parse(e.data)); });
+    stream.addEventListener("done", function (e) {
+      var data = JSON.parse(e.data);
+      setStatus("run <b>" + id + "</b> " + data.status + (data.summary ? " — " + data.summary : ""), false);
+      setChips(data.stats || {});
+      showRows(data.rows);
+      showShots(id, data.shots);
+      // Pictures are the point of taking them: if a run produced any, put
+      // them in front rather than behind a tab nobody clicked.
+      if ((data.shots || []).length) setView("shots");
+      loadHistory();
+      stream.close();
+      stream = null;
+    });
+    stream.onerror = function () {
+      // The stream ends when the server closes it after "done"; only say
+      // something if the run is supposed to still be going.
+      if (stream && stream.readyState === 2 && !$("stop").disabled) {
+        write({ at: Date.now(), level: "warn", message: "event stream dropped — reopening" });
+        setTimeout(function () { listen(id); }, 1000);
+      }
+    };
+  }
+
+  $("start").onclick = function () {
+    var config;
+    try { config = buildConfig(); } catch (e) { return showError(e.message); }
+    showError(null);
+    $("start").disabled = true;
+
+    fetch("/api/runs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(config),
+    }).then(function (r) {
+      return r.json().then(function (body) { return { ok: r.ok, body: body }; });
+    }).then(function (res) {
+      if (!res.ok) { $("start").disabled = false; return showError(res.body.error || "refused"); }
+      showRows([]);
+      showShots(res.body.id, []);
+      setView("results");
+      $("results").innerHTML = '<div class="empty">Running…</div>';
+      setStatus("run <b>" + res.body.id + "</b> running", true);
+      listen(res.body.id);
+      loadHistory();
+    }).catch(function (e) {
+      $("start").disabled = false;
+      showError("could not reach the server: " + e.message);
+    });
+  };
+
+  $("stop").onclick = function () {
+    if (!currentRun) return;
+    fetch("/api/runs/" + currentRun + "/stop", { method: "POST" });
+    $("stop").disabled = true;
+  };
+
+  function showError(message) {
+    var box = $("formError");
+    box.hidden = !message;
+    box.textContent = message || "";
+  }
+
+  function loadHistory() {
+    fetch("/api/runs").then(function (r) { return r.json(); }).then(function (runs) {
+      var box = $("history");
+      box.textContent = "";
+      runs.slice(0, 20).forEach(function (run) {
+        var el = document.createElement("div");
+        el.className = "s-" + run.status;
+        var when = new Date(run.startedAt).toLocaleTimeString();
+        el.textContent = when + "  " + run.mode + "  " + run.status +
+          (run.summary ? "  — " + run.summary : "") + "  (" + run.lines + " lines)";
+        el.onclick = function () { listen(run.id); };
+        box.appendChild(el);
+      });
+    });
+  }
+
+  // ---- options -----------------------------------------------------------
+  var presets = [];
+  fetch("/api/options").then(function (r) { return r.json(); }).then(function (options) {
+    ["kind", "botKind"].forEach(function (name) {
+      options.kinds.forEach(function (kind) {
+        form.elements[name].appendChild(new Option(kind, kind));
+      });
+    });
+    ["engine", "botEngine"].forEach(function (name) {
+      options.engines.forEach(function (engine) {
+        form.elements[name].appendChild(new Option(engine, engine));
+      });
+    });
+    presets = options.presets;
+    presets.forEach(function (preset) {
+      form.elements.preset.appendChild(new Option(preset.name, preset.name));
+    });
+    if (!restore()) {
+      form.elements.kind.value = "mixed";
+      form.elements.botKind.value = "desktop";
+      addFieldRow({ name: "name", selector: ".product-name" });
+      addFieldRow({ name: "price", selector: ".product-price" });
+    }
+    updatePreset();
+    routeHint("proxies", "browsers", "routeCount");
+    routeHint("botProxies", "botBrowsers", "botRouteCount");
+  });
+
+  function updatePreset() {
+    var chosen = presets.filter(function (p) { return p.name === value("preset"); })[0];
+    $("presetNote").textContent = chosen ? chosen.note : "";
+    if (!chosen) return;
+    form.elements.siteName.value = chosen.name;
+    form.elements.loginUrl.value = chosen.loginUrl;
+    form.elements.signupUrl.value = chosen.signupUrl || "";
+  }
+  form.elements.preset.addEventListener("change", updatePreset);
+
+  $("viewAccounts").onclick = function () {
+    fetch("/api/accounts?path=" + encodeURIComponent(value("bookPath") || "accounts.db"))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        write({ at: Date.now(), level: "step", message: data.accounts.length + " accounts in " + data.path });
+        data.accounts.forEach(function (a) {
+          write({ at: Date.now(), level: "info",
+                  message: "  " + (a.profile || "unassigned").padEnd(26) + " " + a.email + "  " + a.status });
+        });
+        if (!data.accounts.length) {
+          write({ at: Date.now(), level: "warn", message: "  nothing on file yet - create accounts first" });
+        }
+      });
+  };
+
+  loadHistory();
+  setStatus("idle", false);
+  write({ at: Date.now(), level: "info",
+          message: "Ready. Start a run, or click one in the history below to read it back." });
+})();
+</script>
+</body>
+</html>
