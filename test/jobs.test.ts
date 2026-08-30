@@ -13,8 +13,12 @@ import {
   startUrls,
   resolveSite,
   validate,
+  seedUrlsFrom,
+  SEED_URL_CAP,
+  enumerateResult,
   type BotConfig,
   type ScrapeConfig,
+  type EnumerateConfig,
 } from "../jobs";
 
 const scrape = (over: Partial<ScrapeConfig> = {}): ScrapeConfig => ({
@@ -31,6 +35,14 @@ const bot = (over: Partial<BotConfig> = {}): BotConfig => ({
   site: { name: "demo", loginUrl: "https://demo.example/login" },
   credentials: "a@example.com:one\nb@example.com:two",
   browsers: 2,
+  ...over,
+});
+
+const enumerate = (over: Partial<EnumerateConfig> = {}): EnumerateConfig => ({
+  mode: "enumerate",
+  target: "example.com",
+  enumMode: "subdomain",
+  wordlist: "/tmp/words.txt",
   ...over,
 });
 
@@ -222,5 +234,202 @@ describe("bot configs", () => {
 
   test("a site with no login URL is refused", () => {
     assert.throws(() => validate(bot({ site: { name: "x", loginUrl: "" } })), /Give a login URL/);
+  });
+});
+
+
+describe("enumerate configs", () => {
+  test("a subdomain config passes", () => {
+    validate(enumerate());
+  });
+
+  test("a path config passes", () => {
+    validate(enumerate({ enumMode: "path", target: "https://example.com/" }));
+  });
+
+  test("a missing target is refused", () => {
+    // Rejected in the form, before ffuf is ever spawned.
+    assert.throws(() => validate(enumerate({ target: "" })), /target domain or URL/);
+    assert.throws(() => validate(enumerate({ target: "   " })), /target domain or URL/);
+  });
+
+  test("a missing wordlist is refused", () => {
+    assert.throws(() => validate(enumerate({ wordlist: "" })), /wordlist path/);
+    assert.throws(() => validate(enumerate({ wordlist: "  " })), /wordlist path/);
+  });
+
+  test("an unknown mode is refused", () => {
+    assert.throws(() => validate(enumerate({ enumMode: "portscan" as any })), /Enumerate mode must be/);
+  });
+
+  test("path mode needs a URL, subdomain mode a bare domain", () => {
+    // FUZZ has to have somewhere to go, and that place is a URL; a subdomain
+    // fuzz on a scheme is the same mistake the other way round.
+    assert.throws(() => validate(enumerate({ enumMode: "path", target: "example.com" })), /base URL/);
+    assert.throws(
+      () => validate(enumerate({ enumMode: "subdomain", target: "https://example.com" })),
+      /bare domain/
+    );
+  });
+
+  test("thread and rate floors are enforced", () => {
+    assert.throws(() => validate(enumerate({ threads: 0 })), /one thread/);
+    assert.throws(() => validate(enumerate({ rate: -5 })), /negative/);
+  });
+
+  test("a fully specified config passes and keeps its shape", () => {
+    const config = enumerate({
+      enumMode: "path",
+      target: "https://example.com/",
+      wordlist: "/tmp/w.txt",
+      threads: 40,
+      rate: 100,
+      timeoutMs: 60_000,
+      matchStatus: "200,301",
+      filterStatus: "404",
+      filterSize: 4242,
+      filterWords: 12,
+      store: { path: "out.db", table: "hits" },
+    });
+    validate(config);
+    assert.equal(config.mode, "enumerate");
+    assert.equal(config.enumMode, "path");
+    assert.equal(config.matchStatus, "200,301");
+    assert.equal(config.store?.table, "hits");
+  });
+});
+
+
+describe("start URLs take any named URL, not just numbered ones", () => {
+  // The user's core doubt: they thought scrape "only goes through numbers as
+  // directories". It never did - startUrls passes arbitrary URLs through
+  // untouched, and the {n} range is one optional add-on.
+  test("named pages, deep paths and query strings pass through unchanged", () => {
+    const given = [
+      "https://site/index.html",
+      "https://site/products/shoes",
+      "https://site/about",
+      "https://site/search?q=boots&page=2",
+    ];
+    assert.deepEqual(startUrls(scrape({ urls: given })), given);
+  });
+
+  test("a single named URL with no number anywhere is fine on its own", () => {
+    assert.deepEqual(
+      startUrls(scrape({ urls: ["https://shop.example/catalog/index"] })),
+      ["https://shop.example/catalog/index"]
+    );
+  });
+
+  test("named URLs and a numbered range coexist, in that order", () => {
+    const urls = startUrls(
+      scrape({
+        urls: ["https://site/index.html", "https://site/about"],
+        range: { pattern: "https://site/list?page={n}", from: 1, to: 2 },
+      })
+    );
+    assert.deepEqual(urls, [
+      "https://site/index.html",
+      "https://site/about",
+      "https://site/list?page=1",
+      "https://site/list?page=2",
+    ]);
+  });
+});
+
+describe("enumerate seed URLs", () => {
+  test("deduplicates while keeping first-seen order", () => {
+    const { urls, truncated } = seedUrlsFrom([
+      { url: "https://a" },
+      { url: "https://b" },
+      { url: "https://a" },
+      { url: "https://c" },
+    ]);
+    assert.deepEqual(urls, ["https://a", "https://b", "https://c"]);
+    assert.equal(truncated, 0);
+  });
+
+  test("blank urls are skipped rather than seeded", () => {
+    const { urls } = seedUrlsFrom([{ url: "" }, { url: "https://x" }, { url: "" }]);
+    assert.deepEqual(urls, ["https://x"]);
+  });
+
+  test("the list is capped and it reports how many were dropped", () => {
+    const hits = Array.from({ length: SEED_URL_CAP + 5 }, (_, i) => ({ url: `https://h/${i}` }));
+    const { urls, truncated } = seedUrlsFrom(hits);
+    assert.equal(urls.length, SEED_URL_CAP);
+    assert.equal(truncated, 5);
+  });
+
+  test("a custom cap is honoured, after the dedupe", () => {
+    const { urls, truncated } = seedUrlsFrom(
+      [{ url: "a" }, { url: "b" }, { url: "a" }, { url: "c" }],
+      2
+    );
+    assert.deepEqual(urls, ["a", "b"]);
+    // three distinct after dedupe, cap 2, so one dropped.
+    assert.equal(truncated, 1);
+  });
+});
+
+
+describe("enumerate result shaping (streaming + partial-on-stop)", () => {
+  // A minimal ffuf hit. The streaming and full-array hits share these identity
+  // fields; contentType is the one that is absent on a streamed hit.
+  const hit = (over: Record<string, unknown> = {}) => ({
+    input: "x",
+    url: "https://x",
+    host: "x",
+    status: 200,
+    length: 1,
+    words: 1,
+    lines: 1,
+    ...over,
+  }) as any;
+
+  test("a finished run summarises the count and carries the full seed set", () => {
+    const r = enumerateResult(
+      [hit({ url: "https://b", host: "b" }), hit({ url: "https://a", host: "a" })],
+      "subdomains"
+    );
+    assert.equal(r.summary, "2 subdomains found");
+    // sorted by host, so a before b regardless of arrival order
+    assert.deepEqual(r.rows!.map((row) => row.host), ["a", "b"]);
+    assert.deepEqual(r.seedUrls, ["https://a", "https://b"]);
+  });
+
+  test("a stopped run keeps its partials and says so", () => {
+    // This is the partial-on-stop contract: streamed hits found before the kill
+    // come back rather than an empty result.
+    const r = enumerateResult([hit({ url: "https://a", host: "a" })], "paths", true);
+    assert.equal(r.summary, "stopped - 1 paths found");
+    assert.deepEqual(r.seedUrls, ["https://a"]);
+    assert.equal(r.rows!.length, 1);
+  });
+
+  test("a stop with nothing found is still a clean, honest result", () => {
+    const r = enumerateResult([], "subdomains", true);
+    assert.equal(r.summary, "stopped - 0 subdomains found");
+    assert.deepEqual(r.rows, []);
+    assert.deepEqual(r.seedUrls, []);
+  });
+
+  test("the table is a 50-row sample while seedUrls carries the rest", () => {
+    const hits = Array.from({ length: 120 }, (_, i) => {
+      const id = String(i).padStart(3, "0");
+      return hit({ url: `https://h/${id}`, host: `h/${id}` });
+    });
+    const r = enumerateResult(hits, "paths");
+    assert.equal(r.rows!.length, 50);
+    assert.equal(r.seedUrls!.length, 120);
+  });
+
+  test("contentType rides along when present, and is null when a streamed hit lacks it", () => {
+    const r = enumerateResult(
+      [hit({ url: "https://a", host: "a", contentType: "text/html" }), hit({ url: "https://b", host: "b" })],
+      "paths"
+    );
+    assert.equal(r.rows![0].contentType, "text/html");
+    assert.equal(r.rows![1].contentType, null);
   });
 });

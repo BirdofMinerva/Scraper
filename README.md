@@ -6,11 +6,70 @@ back a result, `crawl.ts` splits one site across many browsers, `storage.ts`
 puts what they bring back into a database, `stack.ts` opens a batch of browsers
 to drive by hand, `turnstile.ts` gets a page through a Cloudflare interstitial,
 `accounts.ts` gives each browser its own login, and `actions.ts` says what it
-does once it is in. `human.ts` holds the timing and pointer behaviour the rest
-of them share, `login-sites.ts` is nine
-real login forms to check `accounts.ts` against, `server.ts` puts a dashboard
+does once it is in. `ffuf.ts` enumerates a target's subdomains and paths from
+a wordlist — the named URLs, not just numbered ones, that a crawl then works
+through — and `enumerate.ts` is its command line. `human.ts` holds the timing
+and pointer behaviour the rest of them share, `login-sites.ts` is nine real
+login forms to check `accounts.ts` against, `server.ts` puts a dashboard
 in front of the lot — `npm run dash` — and `clean.ts` clears the databases
 again when the project changes hands.
+
+## Contents
+
+- [Codebase map (start here)](#codebase-map-start-here)
+- [Install](#install)
+- [missions.ts](#missionsts) — send fingerprints at a page, bring back a result
+- [proxies.ts](#proxiests) — route browsers through other IPs
+- [stack.ts](#stackts) — open a batch of browsers to drive by hand
+- [crawl.ts](#crawlts) — split one site across many browsers
+- [turnstile.ts](#turnstilets) — get past a Cloudflare interstitial
+- [accounts.ts](#accountsts) — one login per fingerprint
+- [actions.ts](#actionsts) — what a browser does once signed in
+- [The dashboard](#the-dashboard) — `npm run dash`
+- [storage.ts](#storagets) — rows into a database
+- [clean.ts](#cleants) — empty the databases
+- [Tests](#tests) — how the suite is run, and field results
+- [browsers.ts](#browsersts) — the 30 fingerprints and the hardening
+
+## Codebase map (start here)
+
+A fast orientation for contributors. Each module is a single file at the repo
+root, documented in full further down. Every module has a matching
+`test/<name>.test.ts` (plain `node:test` + `node:assert/strict`).
+
+| Module | One-line job | Leans on |
+|---|---|---|
+| `browsers.ts` | 30 believable fingerprints; launches profiles; owns the virtual display | — |
+| `human.ts` | Shared human timing / pointer behaviour | — |
+| `proxies.ts` | Route a browser through other IPs (single hop or chains) | — |
+| `routes.ts` | Parse `label=url` proxy routes (pure, no network) | `proxies` |
+| `missions.ts` | Send fingerprints at one page, bring back a result | `browsers`, `proxies` |
+| `stack.ts` | Open a batch of browsers to drive by hand | `browsers` |
+| `crawl.ts` | Split one site across many browsers; shared queue + per-host limiter | `stack`, `storage`, `turnstile` |
+| `turnstile.ts` | Get a page through a Cloudflare interstitial | `browsers` |
+| `accounts.ts` | One login per fingerprint; find the form, submit, read outcome | `browsers`, `actions` |
+| `actions.ts` | What a browser does once signed in (read/shot/…) | `browsers` |
+| `storage.ts` | Rows → database (SQLite by default) | — |
+| `targets.ts` | The graded list of live probe targets | — |
+| `ffuf.ts` | Wraps the `ffuf` binary for subdomain and path/wordlist enumeration | — |
+| `enumerate.ts` | CLI for `ffuf.ts` — `npm run enum` (subdomain/path discovery) | `ffuf` |
+| `jobs.ts` | The runnable job modes (`scrape`, `bot`, `enumerate`) the dashboard exposes | `crawl`, `accounts`, `storage`, `ffuf` |
+| `server.ts` | `node:http` dashboard, SSE run logs — `npm run dash` | `jobs`, `dashboard.html` |
+| `dashboard.html` | Single-page UI served by `server.ts` | — |
+| `clean.ts` | Empty/delete the databases when the project changes hands | `storage` |
+
+**How a job flows:** the browser form in `dashboard.html` POSTs a config to
+`server.ts` → `server.ts` calls `validate()` then a `run*` function in
+`jobs.ts` → the job drives `crawl.ts`/`accounts.ts`, streaming logs/stats back
+over SSE, and writes rows through `storage.ts`. To add a capability end-to-end
+you touch: a new module for the engine, a job mode in `jobs.ts`, a route +
+`JobConfig` case in `server.ts`, and a form panel in `dashboard.html`.
+
+**Conventions:** CommonJS TS run via `tsx`; JSDoc block at the top of every
+module saying *why* it exists; spawn external binaries with
+`child_process` (see `browsers.ts`, `field-test-live.ts`); keep pure,
+network-free parsing in its own file so it can be tested without a browser
+(see `routes.ts`).
 
 ```ts
 import { defineMission, runMission, partition } from "./missions";
@@ -48,13 +107,13 @@ Dependencies are `playwright`, `playwright-extra` and
 
 ---
 
-# missions.ts
+## missions.ts
 
 A mission is one function that receives a ready page and returns something.
 The runner handles picking a fingerprint, launching, retrying, running several
 at once, and closing everything afterwards.
 
-## defineMission
+### defineMission
 
 ```ts
 const mission = defineMission({
@@ -99,7 +158,7 @@ is what a probe measuring blocks wants.
 A challenge can be served on any request, not just the first, so `ctx.challenge()`
 is there for navigations the mission makes itself.
 
-## Running
+### Running
 
 ```ts
 runMission(mission, options)   // run one mission N times
@@ -131,7 +190,7 @@ const results = await runEach(
 results.forEach((r) => console.log(r.target, r.ok ? r.value : r.error.message));
 ```
 
-## Results
+### Results
 
 Nothing throws. Every run comes back as:
 
@@ -147,7 +206,7 @@ Retries always move to a **different** profile, and to the next proxy when
 `proxies` is set — a block is usually specific to the fingerprint or the IP
 that earned it, and retrying on the same one just spends another attempt.
 
-## HTTP through the browser
+### HTTP through the browser
 
 Use `ctx.fetch`, not `context.request`. Playwright's `APIRequestContext` is
 issued by the Node driver, so it carries **Node's** TLS fingerprint while the
@@ -173,7 +232,7 @@ back automatically to loading the URL in a throwaway tab, which is not subject
 to CORS and is still the browser's own stack. `fetchViaPage(page)` is the same
 helper if you are working outside a mission.
 
-## human
+### human
 
 Uniform delays are their own tell: real gaps cluster around a typical value
 with a long tail, and never form the flat histogram `Math.random()` produces.
@@ -210,7 +269,7 @@ page.
 - **Scrolling** is several wheel notches per gesture with reading pauses,
   occasional scroll-back, and idle pointer drift.
 
-### Persona
+#### Persona
 
 Traits are sampled once per attempt and held for the whole session, so a fast
 typist stays a fast typist. Re-rolling per action would average every session
@@ -236,7 +295,7 @@ mean gap 311ms  sd 217  range 83–922    speed 1.47   22 keys (2 typos fixed)
 
 ---
 
-# proxies.ts
+## proxies.ts
 
 Playwright accepts exactly one upstream proxy per browser. To chain several,
 `startProxyChain` runs a small local proxy that the browser talks to and
@@ -249,7 +308,7 @@ browser -> 127.0.0.1:auto -> hop1 -> hop2 -> target
 Only the last hop's IP reaches the target, and no single hop sees both the
 browser and the destination.
 
-## Using proxies
+### Using proxies
 
 Anywhere a proxy is accepted, these three shapes work:
 
@@ -309,7 +368,7 @@ than leaking past.
 
 ---
 
-# stack.ts
+## stack.ts
 
 A stack is a batch of browsers, opened together, each wearing a different
 fingerprint. Use it when you want to drive them yourself rather than hand work
@@ -370,7 +429,7 @@ browsers that did start, so a partial stack never leaks processes.
 
 ---
 
-# crawl.ts
+## crawl.ts
 
 Point many browsers at one site and get one coherent result. Work is claimed
 from a shared queue, rows are merged and deduplicated as they arrive, and every
@@ -409,7 +468,7 @@ result.failures;      // url, error, attempts
 | `timeout` | `45s` | per-page budget |
 | `challenge` | on | pass a Cloudflare interstitial per page; `false` to leave it |
 
-## Why it is built this way
+### Why it is built this way
 
 **Work is claimed, not sharded.** Handing browser 7 pages 21–30 means the run
 lasts as long as its unluckiest shard — one slow proxy and everything waits.
@@ -431,7 +490,7 @@ block that has nothing to do with fingerprints. `HostLimiter` reserves each
 slot synchronously before awaiting, so concurrent workers queue instead of all
 reading the same timestamp and firing together.
 
-## Failure handling
+### Failure handling
 
 A failed URL goes back on the queue with an attempt counted against it, and is
 reported in `failures` only once it runs out. Verified at 40 pages with one in
@@ -450,7 +509,7 @@ pages, 60 of 60 items, zero failures, `relaunches: 1`.
 
 ---
 
-# turnstile.ts
+## turnstile.ts
 
 Cloudflare's interstitial — the "Performing security verification" page — with
 a Turnstile checkbox on it. `passChallenge` waits it out and presses the
@@ -472,7 +531,7 @@ if (!outcome.passed) throw new Error(outcome.detail);
 | `isChallenged(page)` | is the interstitial up |
 | `clearanceToken(page)` | the `cf_clearance` cookie, if one was issued |
 
-## Where it runs on its own
+### Where it runs on its own
 
 Nothing has to call this file for a challenge to be handled. It is wired into
 every navigation the toolkit makes:
@@ -509,7 +568,7 @@ else here.
 challenged at all, so "solved it" stays distinguishable from "there was nothing
 there" — a probe that reports a pass on every page is not measuring anything.
 
-## What actually gets it through
+### What actually gets it through
 
 Three things, and only the third is in this file.
 
@@ -546,7 +605,7 @@ The state is read from `window._cf_chl_opt`, the challenge script's own config
 object, set inline before anything renders — steadier than the title, which is
 localised, or the body text, which differs between challenge templates.
 
-## What it is not
+### What it is not
 
 Not a Turnstile solver. Nothing here computes a token, replays one, or talks to
 a solving service: the widget is satisfied by the browser and the pointer, or
@@ -557,7 +616,7 @@ route is what changes that, the same as everywhere else in these files.
 
 ---
 
-# accounts.ts
+## accounts.ts
 
 One account per browser: created by that browser, signed into by that browser,
 and filed against the fingerprint that owns it.
@@ -608,7 +667,7 @@ form actually has is the one that gets typed. Most real login forms take a
 username in a plain text input, and a flow that only looked for an email field
 reports "no login form" for a form that is plainly there.
 
-## One account per fingerprint
+### One account per fingerprint
 
 This is the whole premise, and it is the reason the module exists rather than
 a `page.fill` in each script. Five accounts created by five browsers are five
@@ -633,7 +692,7 @@ have created the account server-side, and an account whose password was never
 written down is not an account — it is a dead email address. A row saying
 `pending` is worth more than a clean table.
 
-## Finding the form
+### Finding the form
 
 A spec that has to name every selector is a spec nobody writes for the second
 site, so fields are discovered and `fields` is the escape hatch:
@@ -649,7 +708,7 @@ those. `findField` returns the selector along with the locator, because
 `human.type` works in selectors and two ways of typing into a field is one too
 many.
 
-## Reading the outcome
+### Reading the outcome
 
 `isSignedIn` deliberately does not test whether the URL changed. A form that
 redirects back to itself with an error also changes URL, and a site that signs
@@ -682,7 +741,7 @@ The failure modes are told apart, which is the same discipline as `detect.ts`:
 | `no login form on the page` | the page is not what we thought it was |
 | `submitted, still not signed in` | it went through and nothing came back |
 
-## Typing a password
+### Typing a password
 
 Fields are typed with `human.type`, which makes typos and corrects them. That
 behaviour is worth having and is also why every field is **read back after
@@ -690,7 +749,7 @@ typing** and repaired with `fill` if it drifted. A correction that did not take
 leaves an account whose password is not the one in the book, and that is
 unrecoverable rather than merely wrong.
 
-## The submit
+### The submit
 
 Buttons are found the same way fields are, and the list has to cover a button
 with **no `type` attribute sitting outside any `<form>`** —
@@ -717,7 +776,7 @@ gone, nothing on the page mentions credentials, and the flow concludes the
 password was wrong. `test/accounts-flow.test.ts` serves that response
 deliberately.
 
-## Live results: nine practice logins
+### Live results: nine practice logins
 
 `login-sites.ts` is a catalogue of real sites that publish their own
 credentials, and `login-test.ts` signs in to each of them twice:
@@ -776,7 +835,7 @@ credentials, so it is flagged `acceptsAnything` and its wrong-password run is
 expected to succeed. A single site that behaves that way is what keeps
 "refused everything" from looking like a pass.
 
-## Sites
+### Sites
 
 `SCRAPINGCOURSE` ships with the module: one published demo account and no
 registration, so it is the site to check the sign-in path against. The
@@ -786,7 +845,7 @@ reporting nothing.
 
 ---
 
-# actions.ts
+## actions.ts
 
 What a browser does once it is signed in.
 
@@ -833,7 +892,7 @@ Nothing throws. `detail` on a failure is `step 2 (click) failed: …`, because
 these lists are written in a web form and the step number is what turns the
 message into a fix.
 
-## read
+### read
 
 `read` is how a bot brings something back. `{ do: "read", name: "price",
 selector: ".price" }` puts one value under `price`; `all: true` collects every
@@ -841,7 +900,7 @@ match; `attribute: "href"` takes an attribute instead of the text. Each name
 becomes a **column in the results table**, so a run where six accounts each
 read their own balance is a table rather than six log lines.
 
-## shot
+### shot
 
 Screenshots are the "view" half — what this browser was actually looking at,
 which is the only honest answer to "did it work?" for a session you cannot
@@ -852,7 +911,7 @@ because ten screenshots sorted as text otherwise put 10 before 2.
 The label comes from a text box and ends up in a filename, so it is stripped to
 `[a-z0-9_-]` — `../../etc/passwd` becomes `etc-passwd`.
 
-## Typed text is never logged
+### Typed text is never logged
 
 `describeAction` counts characters rather than printing them:
 
@@ -864,7 +923,7 @@ These lines go to the terminal panel and the run log, and an action list
 carries search terms, messages, and occasionally a password typed into the
 wrong row of the form.
 
-## With accounts
+### With accounts
 
 `createAccounts`, `signInAll`, `signInEach` and `ensureAccounts` all take
 `after`, run per browser on its signed-in page:
@@ -884,7 +943,7 @@ steps.
 
 ---
 
-# The dashboard
+## The dashboard
 
 A local web UI for the whole toolkit: two modes, a form each, and the run's
 output streaming into a terminal panel.
@@ -903,7 +962,7 @@ that cannot work is refused in the form rather than three minutes into a crawl.
 browsers, write files and use whatever proxies it is handed. `--host` will bind
 elsewhere and says what that means when you do.
 
-## Scrape mode
+### Scrape mode
 
 Start URLs and/or a numbered range (`{n}` is the page number), a repeating-row
 selector, and a field list — name, selector within the row, and an optional
@@ -915,7 +974,7 @@ engine, per-host delay, retries, max pages, timeout, challenge handling, and a
 SQLite file to write to. Rows appear in the results table as the run finishes,
 and in the database as they are found.
 
-## Bot mode
+### Bot mode
 
 The same idea over `accounts.ts`. The action decides where the logins come
 from:
@@ -940,7 +999,7 @@ and carries a note about what makes that site awkward) or described by hand:
 login and signup URLs, checkboxes to tick, selector overrides, and *signed in
 when the URL contains* for sites with no sign-out link to find.
 
-## Once signed in
+### Once signed in
 
 Under the login list is a step builder — a row per action, `do` from a
 dropdown, and the fields that step needs. Rows drag to reorder, because these
@@ -952,7 +1011,7 @@ The whole vocabulary is [actions.ts](#actionsts): visit, click, type, scroll,
 wait, read, shot. Every `read` name becomes a column in the results table; every
 `shot` becomes a picture in the gallery.
 
-## Screenshots
+### Screenshots
 
 Bot runs write their screenshots to `runs/<run id>/`, and the panel beside the
 results has a **Screenshots** tab: thumbnails named for the browser that took
@@ -964,7 +1023,7 @@ This is the closest thing to watching the browsers work. They run headed on a
 virtual display, so there is nothing to watch directly; a `shot` step at the
 point you care about is what "view" means here.
 
-## An IP per browser
+### An IP per browser
 
 Proxy routes are `label=url` per line, hops separated by `>`, the same syntax as
 `PROXIES` everywhere else — **one route per browser, in order**.
@@ -999,7 +1058,7 @@ Worth the minute before a long run: a proxy that is quietly dead, or two
 entries that resolve to the same exit, produce results attributed to a route
 that never carried them.
 
-## The terminal panel
+### The terminal panel
 
 Every line the run produces, with a level and a timestamp: progress in the
 accent colour, successes green, failures red. `console` output from inside the
@@ -1015,7 +1074,7 @@ back from the history, shows the whole thing rather than an empty panel.
 claiming the next URL, and a bot run stops before the next browser starts.
 Nothing is killed mid-page, so no browser is left with a page open.
 
-## API
+### API
 
 The page is a client of the same HTTP API, so anything it does can be scripted:
 
@@ -1031,7 +1090,7 @@ The page is a client of the same HTTP API, so anything it does can be scripted:
 
 ---
 
-# storage.ts
+## storage.ts
 
 Give a run a `store` and whatever a mission returns is written as it comes
 back — nothing is held in memory until the end, so an interrupted crawl keeps
@@ -1043,7 +1102,7 @@ await runMission(mission, { runs: 200, store });
 await store.close();
 ```
 
-## What gets stored
+### What gets stored
 
 The mission's return value, shaped by `toRows`:
 
@@ -1073,7 +1132,7 @@ run: async ({ page, save, fetch }) => {
 },
 ```
 
-## Stores
+### Stores
 
 | Store | Notes |
 | --- | --- |
@@ -1084,7 +1143,7 @@ run: async ({ page, save, fetch }) => {
 | `multiStore(a, b, …)` | write to several at once, e.g. SQLite plus a JSONL backup |
 | `customStore(name, save, close?)` | anything else — Postgres, an HTTP endpoint, S3 |
 
-### SQLite specifics
+#### SQLite specifics
 
 The table is created from the first batch and **widened automatically** when
 later rows carry new fields. Scraped shapes drift, and a crawl that dies on an
@@ -1105,7 +1164,7 @@ sqliteStore({ path: "data.db", table: "products", key: (row) => String(row.url) 
 `key` becomes the primary key and writes use `INSERT OR REPLACE`. Without it
 rows get an autoincrementing `_id` and every run appends.
 
-### Postgres and friends
+#### Postgres and friends
 
 `customStore` takes any async writer:
 
@@ -1129,7 +1188,7 @@ Rows arrive with the `_`-prefixed metadata already attached.
 
 ---
 
-# clean.ts
+## clean.ts
 
 Clearing out what runs leave behind — one database, several, or all of them.
 
@@ -1156,7 +1215,7 @@ hard-test.db                492 KB  books 1000  [+2 sidecar]
 dashboard-accounts.db holds passwords in plain text - clear before sharing this directory.
 ```
 
-## Delete or empty
+### Delete or empty
 
 Deleting removes the file **and its `-wal`, `-shm` and `-journal`**. Removing
 the database alone leaves the log files beside it, which is both untidy and
@@ -1172,14 +1231,14 @@ inode and the rows go somewhere nobody can read. Emptying also:
 - runs `VACUUM` afterwards, or the pages stay allocated and the file looks
   untouched to anyone glancing at the directory.
 
-## The two flags
+### The two flags
 
 `PASSWORDS` and `session data` are separate on purpose. A `password` column is
 a login someone could use; a `cookies` column is usually a trace, and
 `field-test-live.db` has one holding cookie *names*. Labelling that "holds
 credentials" spends the warning that `accounts.db` actually needs.
 
-## Handing the project on
+### Handing the project on
 
 `--handoff` clears every database plus the exports and `proxies.txt`. That last
 one is there because a route line is `label=http://user:pass@host` — someone
@@ -1195,7 +1254,7 @@ Two things worth knowing when packing this up:
   results database is safe to pass on in that respect even when the run went
   through an authenticated proxy.
 
-## Refusing to be casual about it
+### Refusing to be casual about it
 
 Nothing is deleted without a confirmation that has to be **typed** —
 `Type "clean" to confirm:` — because this is not undoable and `--all` is one
@@ -1212,7 +1271,7 @@ database that already has a `-wal`, where immutable would not see rows still
 sitting in that log. Undercounting rows in a report someone is about to delete
 things from is the worse failure.
 
-## Why it is not a button in the dashboard
+### Why it is not a button in the dashboard
 
 The dashboard has no authentication — it is bound to localhost and it can
 already launch browsers and write files. "Delete every database" is a different
@@ -1221,7 +1280,7 @@ is a terminal command anyway.
 
 ---
 
-# Tests
+## Tests
 
 ```sh
 npm test            # everything: unit, then browser-backed
@@ -1342,13 +1401,13 @@ Six real bugs came out of writing them:
   server**, which Playwright accepts and ignores — indistinguishable from a
   proxy that did not help.
 
-## Field results
+### Field results
 
 Two probes. `field-test.ts` reads detection pages that publish their own
 verdict; `field-test-live.ts` loads real commercial homepages and classifies
 the response.
 
-### Detection pages
+#### Detection pages
 
 ```
 bot.sannysoft.com     desktop-chrome    all 58 checks passed
@@ -1393,7 +1452,7 @@ before "improving" the hardening again:
 heavily than headless heuristics — which, on the evidence of g2.com below,
 DataDome appears to.
 
-### Shape parity
+#### Shape parity
 
 `test/stealth.test.ts` opens the same profile twice in one browser, hardened
 and not, and diffs what a detector can read without looking at a single value:
@@ -1415,7 +1474,7 @@ That test caught three leaks no value check would:
   `length` restored so a patched `getParameter` no longer answers to
   `patchedGet`.
 
-### The Accept-Language leak
+#### The Accept-Language leak
 
 The JS surface was not the whole story. Every chromium profile was sending a
 **bare `Accept-Language: en-US`** on the main navigation request - no q-values.
@@ -1450,7 +1509,7 @@ and WebKit honour `extraHTTPHeaders` on the first request, so they keep
 `test/stealth.test.ts` now asserts the header on the wire, from a local server,
 for chromium and firefox profiles.
 
-### Live sites: datacenter IP vs residential
+#### Live sites: datacenter IP vs residential
 
 Same profile (`desktop-chrome`), same script, two routes. `direct` is a
 a region VPS (ASxxxxx a host); `home` is a reverse SSH SOCKS tunnel out through
@@ -1494,7 +1553,7 @@ body sizes, asserting the *prediction* each verdict makes — `edge-blocked` on
 zillow-direct has to be followed by `clean` on zillow-home, or the diagnosis
 was wrong.
 
-### The g2 case, settled
+#### The g2 case, settled
 
 g2.com refused every attempt: from the a region VPS, from the a city
 residential line, before and after the stealth work. The verdict said
@@ -1535,7 +1594,7 @@ it as "served" would have concluded "browser-specific block" from a request
 that never arrived. The probe now follows redirects and reports a 3xx baseline
 as inconclusive rather than as evidence.
 
-### The ScrapingCourse challenges
+#### The ScrapingCourse challenges
 
 `challenges.ts` runs the nine practice challenges at scrapingcourse.com end to
 end, asserting on the data recovered rather than on a status code — a page that
@@ -1571,7 +1630,7 @@ above. Hence `attempts: 3` by default, with six seconds between presses:
 a widget that has been pressed needs time to answer, and the second press
 inside a second is the tell, not the first.
 
-### Response headers
+#### Response headers
 
 The probe navigates inside `run()` and keeps the `Response` object rather than
 reading a status out of `performance.getEntriesByType("navigation")`, which
@@ -1580,7 +1639,7 @@ gives a number and nothing else. It records `server`, `cf-ray`, `cf-mitigated`,
 name which layer said no. `x-datadome: protected` on g2's 403 is how we know
 which of its two vendors answered.
 
-### Reading a verdict
+#### Reading a verdict
 
 | Verdict | Meaning | What to change |
 | --- | --- | --- |
@@ -1594,7 +1653,7 @@ browser was inspected. Confirm it with `--baseline` before spending effort on
 the fingerprint: on g2 that verdict was right about the response and wrong
 about the cause.
 
-### Targets
+#### Targets
 
 `targets.ts` holds the catalogue - 32 sites grouped by the vendor they run,
 with a difficulty and a note where one was earned. The `vendor` field is what
@@ -1630,7 +1689,7 @@ Testing one vendor at a time is the point of the grouping. A fingerprint change
 aimed at DataDome can be checked against five DataDome sites in one run,
 instead of inferring from a single site whether anything moved.
 
-### Running it
+#### Running it
 
 ```sh
 npx tsx field-test-live.ts --routes          # parse proxy config, mask credentials, exit
@@ -1656,7 +1715,7 @@ hostnames it is asking for.
 
 ---
 
-# browsers.ts
+## browsers.ts
 
 30 profiles: 10 desktop, 10 mobile, 10 tablet.
 
@@ -1672,7 +1731,7 @@ agents. Locale and timezone are paired in one table (a `en-US` browser in
 `America/New_York` is a giveaway) and GPU strings come from another, so a
 Windows profile can never claim an Apple renderer.
 
-## Selecting
+### Selecting
 
 ```ts
 getProfile("mobile-pixel-7")                 // by id, throws if unknown
@@ -1686,7 +1745,7 @@ profileRotator()                             // () => profile, shuffled, no repe
 Prefer it to `randomProfile()` in a loop, which will happily serve the same
 fingerprint three times running. `runMission` uses it internally.
 
-## Launching
+### Launching
 
 ```ts
 const { browser, context, profile, channel } = await launchProfile(profile);
@@ -1730,7 +1789,7 @@ await hardenContext(ctx, profile, { browserVersion: browser.version() });
 `launchProfile` only hardens the context it creates, so hardening any extra
 context is on you.
 
-## What the hardening covers
+### What the hardening covers
 
 `playwright-extra` + `puppeteer-extra-plugin-stealth`, with three of its
 evasions disabled (`navigator.hardwareConcurrency`, `navigator.languages`,
@@ -1757,7 +1816,7 @@ rewrite function bodies with helpers like `__name`, which aren't defined inside
 the page and make the whole script throw silently — a string survives any build
 pipeline.
 
-## Display handling
+### Display handling
 
 Headed browsers need an X display, and a headed Chromium resizes the real OS
 window to match the viewport — a resize that fails intermittently once the
@@ -1776,9 +1835,9 @@ BROWSERS_USE_CURRENT_DISPLAY=1   # stay on your own display and watch them work
 Without `xvfb` installed and with no `DISPLAY` set, launching fails with a
 message telling you to install it.
 
-## What this does not do
+### What this does not do
 
-### TLS is already the browser's
+#### TLS is already the browser's
 
 The browser's own network stack does its TLS, so navigation and in-page
 requests carry a genuine engine fingerprint — there is no Playwright TLS
@@ -1808,7 +1867,7 @@ TLS-rewriting proxy:
   not produce iOS or macOS Safari's ClientHello. If a target fingerprints TLS
   hard, prefer the chromium profiles.
 
-### Genuinely untouched
+#### Genuinely untouched
 
 - **Canvas and audio hashing** — stable per machine and identical across every
   profile here, so 30 profiles look like one machine to a canvas hash.

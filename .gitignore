@@ -20,3 +20,8 @@ node_modules/
 proxies.txt
 *.env
 .env
+
+# Unused Playwright test-runner scaffolding (kept locally, not published to GitHub).
+# The real tests live in test/ and run via `node --import tsx --test`.
+/playwright.config.ts
+/tests/

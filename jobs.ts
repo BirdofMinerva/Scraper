@@ -29,9 +29,15 @@ import type { StackKind } from "./stack";
 import type { Engine } from "./browsers";
 import type { ProxyLike } from "./proxies";
 import path from "node:path";
+import fs from "node:fs";
 import { parseRoutes, describeRoute } from "./routes";
 import { defineMission, runOnce } from "./missions";
 import { getProfile } from "./browsers";
+// Types only: erased at build time, so `jobs.ts` (and everything that imports
+// it, including the unit tests) loads whether or not `ffuf.ts` has landed yet.
+// The functions themselves are pulled in with a dynamic import inside
+// `runEnumerate`, the same shape `server.ts` uses to reach back into this file.
+import type { FfufResult, FfufOptions } from "./ffuf";
 
 // ---------------------------------------------------------------------------
 // What a run reports back
@@ -57,6 +63,13 @@ export type JobResult = {
   /** Screenshot files a bot run took, newest run first in the UI. */
   shots?: string[];
   failures?: Array<{ url?: string; error: string }>;
+  /**
+   * The full discovered URL set an enumerate run offers as seeds for a scrape.
+   * Separate from `rows`, which is only a 50-row sample for the table - a run
+   * that found a thousand paths should be able to seed a scrape with all of
+   * them, not the fifty that fit the preview.
+   */
+  seedUrls?: string[];
 };
 
 // ---------------------------------------------------------------------------
@@ -144,7 +157,45 @@ export type BotConfig = {
   shotDir?: string;
 };
 
-export type JobConfig = ScrapeConfig | BotConfig;
+/**
+ * Point `ffuf` at a target and bring back what answered.
+ *
+ * Two shapes, the same as `ffuf` itself:
+ *
+ * - `subdomain` - fuzz the DNS names in front of a bare domain
+ *   (`FUZZ.example.com`), so `target` is a domain like `example.com`.
+ * - `path`      - fuzz the path of a base URL (`https://example.com/FUZZ`),
+ *   so `target` is a URL. A bare `https://example.com` gets `/FUZZ`
+ *   appended by `ffuf.ts`; a `FUZZ` placed by hand is left where it is.
+ *
+ * Everything below `wordlist` is an `ffuf` knob with a name a person can act
+ * on. The match/filter fields are passed through as `ffuf` gives them: a
+ * status code or list (`200,301`), a size, a word count. A run with none of
+ * them set takes `ffuf`'s own defaults.
+ */
+export type EnumerateConfig = {
+  mode: "enumerate";
+  /** A domain for `subdomain`, a URL for `path`. */
+  target: string;
+  /** Which of the two `ffuf` shapes to run. */
+  enumMode: "subdomain" | "path";
+  /** Path to the wordlist file `ffuf` reads. */
+  wordlist: string;
+  threads?: number;
+  rate?: number;
+  timeoutMs?: number;
+  /** Only keep these HTTP statuses, e.g. `200,301,302`. */
+  matchStatus?: string;
+  /** Drop these statuses, e.g. `404`. */
+  filterStatus?: string;
+  /** Drop responses of this byte size - the usual way past a wildcard. */
+  filterSize?: string | number;
+  /** Drop responses with this many words. */
+  filterWords?: string | number;
+  store?: { path: string; table: string };
+};
+
+export type JobConfig = ScrapeConfig | BotConfig | EnumerateConfig;
 
 // ---------------------------------------------------------------------------
 // Parsing what the form sends
@@ -334,6 +385,26 @@ export function validate(config: JobConfig): void {
     }
     if ((config.browsers ?? 1) < 1) throw new Error("At least one browser");
     checkRoutes(config.proxies, config.browsers ?? 3, config.allowSharedProxies);
+    return;
+  }
+
+  if (config.mode === "enumerate") {
+    const target = config.target?.trim();
+    if (!target) throw new Error("Give a target domain or URL to enumerate");
+    if (config.enumMode !== "subdomain" && config.enumMode !== "path") {
+      throw new Error('Enumerate mode must be "subdomain" or "path"');
+    }
+    // A path fuzz needs somewhere to put FUZZ, and that is a URL. A subdomain
+    // fuzz takes a bare domain and would be wrong with a scheme on it.
+    if (config.enumMode === "path" && !/^https?:\/\//i.test(target)) {
+      throw new Error("Path fuzzing needs a base URL, e.g. https://site/ or https://site/FUZZ");
+    }
+    if (config.enumMode === "subdomain" && /^https?:\/\//i.test(target)) {
+      throw new Error("Subdomain fuzzing takes a bare domain, e.g. example.com - drop the scheme");
+    }
+    if (!config.wordlist?.trim()) throw new Error("Give a wordlist path");
+    if (config.threads !== undefined && config.threads < 1) throw new Error("At least one thread");
+    if (config.rate !== undefined && config.rate < 0) throw new Error("Rate cannot be negative");
     return;
   }
 
@@ -593,6 +664,224 @@ function flattenData(actions?: { data: Record<string, string | string[] | null> 
   return row;
 }
 
+// ---------------------------------------------------------------------------
+// Enumerate
+// ---------------------------------------------------------------------------
+
+/**
+ * The most seed URLs an enumerate run will hand a scrape.
+ *
+ * The whole hit set is written to the database regardless; this cap is only on
+ * the list carried back over SSE and offered as scrape seeds, so a run that
+ * finds tens of thousands of paths cannot bloat the payload or fill the URL
+ * box with more than a scrape should start from at once.
+ */
+export const SEED_URL_CAP = 2000;
+
+/**
+ * The discovered URLs a scrape can be seeded with: deduplicated, in the order
+ * they were first seen, and hard-capped.
+ *
+ * Pure and network-free on purpose - the truncation and dedupe are the parts
+ * worth a test, and neither needs `ffuf` to have run. `truncated` is how many
+ * URLs were dropped by the cap, so the caller can say so out loud.
+ */
+export function seedUrlsFrom(
+  hits: Array<{ url: string }>,
+  cap = SEED_URL_CAP
+): { urls: string[]; truncated: number } {
+  const seen = new Set<string>();
+  const urls: string[] = [];
+  for (const hit of hits) {
+    if (!hit.url || seen.has(hit.url)) continue;
+    seen.add(hit.url);
+    urls.push(hit.url);
+  }
+  const truncated = Math.max(0, urls.length - cap);
+  return { urls: truncated ? urls.slice(0, cap) : urls, truncated };
+}
+
+/** One ffuf hit as a stored/table row - the fields the UI shows and the store keys on. */
+const enumRow = (h: FfufResult): Row => ({
+  url: h.url,
+  host: h.host ?? null,
+  status: h.status,
+  length: h.length,
+  words: h.words,
+  contentType: h.contentType ?? null,
+});
+
+/**
+ * Stable order for hits: by host, then full URL.
+ *
+ * ffuf returns hits in completion order, which shuffles between runs of the
+ * same target; a streamed run arrives in yet another order again. Sorting here
+ * means the table and the seed list read the same however the hits arrived.
+ */
+const byEnumSite = (a: FfufResult, b: FfufResult) =>
+  (a.host ?? a.url).localeCompare(b.host ?? b.url) || a.url.localeCompare(b.url);
+
+/**
+ * Shape a `JobResult` from a set of ffuf hits - the same for a finished run and
+ * a stopped one, save for the summary.
+ *
+ * Pure and network-free, which is the point: the partial-on-stop shaping is the
+ * part worth a test, and it needs neither ffuf nor a socket. The table gets the
+ * first 50 in stable order; the seed list gets the whole set, deduped and
+ * capped by `seedUrlsFrom`.
+ */
+export function enumerateResult(hits: FfufResult[], noun: string, stopped = false): JobResult {
+  const sorted = [...hits].sort(byEnumSite);
+  const { urls: seedUrls } = seedUrlsFrom(sorted);
+  return {
+    summary: `${stopped ? "stopped - " : ""}${sorted.length} ${noun} found`,
+    rows: sorted.slice(0, 50).map(enumRow),
+    seedUrls,
+  };
+}
+
+/**
+ * Run `ffuf` against a target and report what answered.
+ *
+ * `ffuf.ts` is reached with a dynamic import rather than a top-level one so
+ * that the rest of this file - the configs, the validation, the tests over
+ * them - never depends on the binary being present. A run that reaches here
+ * without `ffuf.ts` on disk fails loudly at the first line, which is the
+ * honest place for that to surface.
+ *
+ * The dashboard's Stop button is cooperative everywhere else; `ffuf` is one
+ * long child process rather than a page-at-a-time loop, so Stop is wired
+ * straight into an `AbortController` that kills it. `FfufOptions.signal` is
+ * the hook `ffuf.ts` provides for exactly this.
+ */
+export async function runEnumerate(config: EnumerateConfig, ctx: JobContext): Promise<JobResult> {
+  validate(config);
+
+  const target = config.target.trim();
+  const wordlist = config.wordlist.trim();
+  // A wordlist that is not there is the commonest way this run dies, and it
+  // dies seconds in with a message about a file rather than about the config.
+  // Catch it here so it reads like the rest of validation.
+  if (!fs.existsSync(wordlist)) {
+    throw new Error(`Wordlist not found: ${wordlist}`);
+  }
+
+  const store = config.store?.path
+    ? sqliteStore({ path: config.store.path, table: config.store.table || "hits", key: (row) => String(row.url) })
+    : undefined;
+
+  // Stop is cooperative and checked between pages elsewhere; here it aborts the
+  // child. A poll rather than a callback because `JobContext.stopped()` is the
+  // only signal we are handed.
+  const controller = new AbortController();
+  const watch = setInterval(() => {
+    if (ctx.stopped()) controller.abort();
+  }, 250);
+
+  const noun = config.enumMode === "subdomain" ? "subdomains" : "paths";
+
+  // Hits stream in one at a time via `onResult`, ahead of the full array ffuf
+  // resolves with. Accumulating them buys two things: a Stop mid-run can hand
+  // back the partial set found so far rather than nothing, and each hit is
+  // written to the store as it lands rather than in one lump at the end - an
+  // interrupted run keeps what it already found, the same discipline as a crawl.
+  const streamed: FfufResult[] = [];
+  const writes: Promise<unknown>[] = [];
+
+  const options: FfufOptions = {
+    wordlist,
+    threads: config.threads,
+    rate: config.rate,
+    timeoutMs: config.timeoutMs,
+    matchStatus: config.matchStatus?.trim() || undefined,
+    filterStatus: config.filterStatus?.trim() || undefined,
+    filterSize: config.filterSize,
+    filterWords: config.filterWords,
+    signal: controller.signal,
+    onResult: (hit) => {
+      streamed.push(hit);
+      ctx.log("good", `${String(hit.status).padEnd(3)} ${hit.host ?? hit.url}  ${hit.length}b`);
+      ctx.stat(noun, streamed.length);
+      ctx.progress(streamed.length);
+      // Write as it lands. A streamed hit has no contentType yet - that only
+      // arrives in the final JSON - but the store keys on url, so the final
+      // upsert below fills it in rather than doubling the row.
+      if (store) {
+        writes.push(
+          store
+            .save([enumRow(hit)])
+            .catch((e) => ctx.log("warn", `store write failed: ${(e as Error).message}`))
+        );
+      }
+    },
+  };
+
+  ctx.log("step", `${config.enumMode} enumeration of ${target}`);
+  ctx.log(
+    "info",
+    `wordlist ${wordlist}` +
+      (config.threads ? `, ${config.threads} threads` : "") +
+      (config.rate ? `, ${config.rate}/s` : "") +
+      (options.matchStatus ? `, match ${options.matchStatus}` : "") +
+      (options.filterStatus ? `, filter ${options.filterStatus}` : "")
+  );
+  if (store) ctx.log("info", `writing to ${config.store!.path} (${config.store!.table || "hits"})`);
+  // Total stays unknown - ffuf does not report the wordlist size back - so the
+  // bar is really just "still working"; the running count chip is the signal.
+  ctx.progress(0);
+
+  try {
+    // Reached lazily: see the note on this function. The signatures are
+    // `ffuf.ts`'s contract; this call fails plainly if the module is absent.
+    const { enumerateSubdomains, fuzzPaths } = await import("./ffuf");
+
+    let hits: FfufResult[];
+    try {
+      hits =
+        config.enumMode === "subdomain"
+          ? await enumerateSubdomains(target, options)
+          : await fuzzPaths(target, options);
+    } catch (error) {
+      // An abort is a Stop, not a failure. Everything `onResult` already
+      // streamed in is real and worth keeping - hand back the partial set
+      // rather than a stack trace about a killed process.
+      if (ctx.stopped()) {
+        await Promise.allSettled(writes);
+        ctx.stat(noun, streamed.length);
+        ctx.log("warn", `enumeration stopped - keeping the ${streamed.length} ${noun} found so far`);
+        return enumerateResult(streamed, noun, true);
+      }
+      throw error;
+    }
+
+    // Let the streamed writes settle, then upsert the full final array: it
+    // carries the contentType the streamed hits did not, and the keyed store
+    // folds it onto the rows already written rather than doubling them.
+    await Promise.allSettled(writes);
+    if (store && hits.length) await store.save(hits.map(enumRow));
+
+    ctx.progress(hits.length, hits.length);
+    ctx.stat(noun, hits.length);
+
+    // Warn once if the seed list was capped - the whole set is in the store, but
+    // only the first `SEED_URL_CAP` are offered as scrape seeds.
+    const { truncated } = seedUrlsFrom(hits);
+    if (truncated) {
+      ctx.log(
+        "warn",
+        `seed list capped at ${SEED_URL_CAP} URLs - ${truncated} more were found and stored, but left out of the scrape seeds`
+      );
+    }
+
+    return enumerateResult(hits, noun, false);
+  } finally {
+    clearInterval(watch);
+    await store?.close();
+  }
+}
+
 export async function runJob(config: JobConfig, ctx: JobContext): Promise<JobResult> {
-  return config.mode === "scrape" ? runScrape(config, ctx) : runBot(config, ctx);
+  if (config.mode === "scrape") return runScrape(config, ctx);
+  if (config.mode === "enumerate") return runEnumerate(config, ctx);
+  return runBot(config, ctx);
 }

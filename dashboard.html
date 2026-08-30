@@ -8,10 +8,11 @@
   :root {
     --bg: #0f1115; --panel: #161922; --panel-2: #1c2029; --line: #262b36;
     --text: #d9dee7; --dim: #8b93a3; --faint: #5c6472;
-    --scrape: #4fc3f7; --bot: #ffb74d; --good: #7ddb8f; --warn: #ffcc66; --bad: #ff7a7a;
+    --scrape: #4fc3f7; --bot: #ffb74d; --enum: #a78bfa; --good: #7ddb8f; --warn: #ffcc66; --bad: #ff7a7a;
     --accent: var(--scrape);
   }
   body.mode-bot { --accent: var(--bot); }
+  body.mode-enumerate { --accent: var(--enum); }
 
   * { box-sizing: border-box; }
   body {
@@ -142,6 +143,7 @@
   <div class="modes" role="group" aria-label="Mode">
     <button id="tab-scrape" aria-pressed="true">Scrape</button>
     <button id="tab-bot" aria-pressed="false">Bot</button>
+    <button id="tab-enumerate" aria-pressed="false">Enumerate</button>
   </div>
   <div class="grow"></div>
   <div class="status" id="status">idle</div>
@@ -158,10 +160,11 @@
       <fieldset>
         <legend>Pages</legend>
         <label>Start URLs, one per line
-          <textarea name="urls" rows="3" placeholder="https://www.scrapingcourse.com/ecommerce/"></textarea>
+          <span class="hint">Any URL — named pages, deep paths, query strings. Not just numbered ones.</span>
+          <textarea name="urls" rows="3" placeholder="https://site/index.html&#10;https://site/products/shoes&#10;https://site/about"></textarea>
         </label>
-        <label>Numbered range
-          <span class="hint">{n} is replaced with each number. Added to the URLs above.</span>
+        <label>Numbered range — optional
+          <span class="hint">Only for pages numbered like ?page=1,2,3 — {n} becomes each number. Leave blank if you're using named URLs.</span>
           <input name="rangePattern" placeholder="https://site/list?page={n}">
         </label>
         <div class="row">
@@ -312,6 +315,54 @@
         <label class="check"><input type="checkbox" name="botVerifyExitIps"> Check each route's exit IP before starting</label>
         <label class="check"><input type="checkbox" name="botAllowSharedProxies"> Let browsers share a route</label>
         <label class="check"><input type="checkbox" name="botChallenge" checked> Pass Cloudflare challenges automatically</label>
+      </fieldset>
+    </div>
+
+    <!-- ---------------------------------------------------------------- -->
+    <div id="pane-enumerate" hidden>
+      <fieldset>
+        <legend>Target</legend>
+        <label>Domain or URL
+          <span class="hint">A bare domain for subdomain mode, a URL for path mode.</span>
+          <input name="enumTarget" placeholder="example.com   ·   https://example.com/">
+        </label>
+        <label>Mode
+          <select name="enumKind">
+            <option value="subdomain">Subdomains — fuzz FUZZ.&lt;domain&gt;</option>
+            <option value="path">Paths — fuzz &lt;url&gt;/FUZZ</option>
+          </select>
+        </label>
+        <label>Wordlist file
+          <span class="hint">A path on this machine that ffuf reads, one candidate per line.</span>
+          <input name="wordlist" placeholder="/usr/share/wordlists/…">
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>ffuf</legend>
+        <div class="row">
+          <label>threads <input name="threads" type="number" min="1" placeholder="40"></label>
+          <label>rate /s <input name="rate" type="number" min="0" placeholder="100"></label>
+          <label>timeout ms <input name="enumTimeout" type="number" min="1000" placeholder="120000"></label>
+        </div>
+        <label>Match status
+          <input name="matchStatus" placeholder="200,204,301,302,307,401,403,405,500">
+        </label>
+        <div class="row">
+          <label>filter status <input name="filterStatus" placeholder="e.g. 404"></label>
+          <label>filter size <input name="filterSize" placeholder="e.g. 4242"></label>
+          <label>filter words <input name="filterWords" placeholder="e.g. 12"></label>
+        </div>
+        <span class="hint">Blank fields take ffuf's defaults. Filtering by size is the usual way past a wildcard that answers everything the same way.</span>
+      </fieldset>
+
+      <fieldset>
+        <legend>Store</legend>
+        <div class="row">
+          <label>SQLite file <input name="enumStorePath" value="dashboard.db"></label>
+          <label>table <input name="enumStoreTable" value="hits"></label>
+        </div>
+        <span class="hint">Discovered hits land here as well as in the results table. Leave the file empty to keep them in memory only.</span>
       </fieldset>
     </div>
   </form>
@@ -470,6 +521,39 @@
     box.appendChild(table);
   }
 
+  // An enumerate run's rows are discovered URLs, and the natural next step is
+  // to scrape them. Rather than make someone copy the list across, offer a
+  // one-click hand-off into scrape mode. Gated on the enumerate row shape so it
+  // never appears over a scrape or bot result.
+  function offerSeeds(rows, seedUrls) {
+    if (!rows || !rows.length) return;
+    var r0 = rows[0];
+    var isEnum = ["url", "host", "status"].every(function (k) {
+      return Object.prototype.hasOwnProperty.call(r0, k);
+    });
+    if (!isEnum) return;
+    // seedUrls is the full discovered set (rows is only a 50-row sample); fall
+    // back to the sample's urls if an older run has no seedUrls.
+    var urls = (seedUrls && seedUrls.length)
+      ? seedUrls
+      : rows.map(function (r) { return r.url; }).filter(Boolean);
+    if (!urls.length) return;
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "mini";
+    btn.style.margin = "8px 10px";
+    btn.textContent = "\u2192 Use " + urls.length + " discovered URL" +
+      (urls.length === 1 ? "" : "s") + " as scrape seeds";
+    btn.onclick = function () {
+      setMode("scrape");
+      form.elements.urls.value = urls.join("\n");
+      save();
+      $("settings").scrollTop = 0;
+    };
+    var box = $("results");
+    box.insertBefore(btn, box.firstChild);
+  }
+
   // ---- fields table ------------------------------------------------------
   function addFieldRow(field) {
     var tr = document.createElement("tr");
@@ -618,6 +702,25 @@
       return config;
     }
 
+    if (mode === "enumerate") {
+      return {
+        mode: "enumerate",
+        target: value("enumTarget"),
+        enumMode: value("enumKind"),
+        wordlist: value("wordlist"),
+        threads: num("threads"),
+        rate: num("rate"),
+        timeoutMs: num("enumTimeout"),
+        matchStatus: value("matchStatus") || undefined,
+        filterStatus: value("filterStatus") || undefined,
+        filterSize: value("filterSize") || undefined,
+        filterWords: value("filterWords") || undefined,
+        store: value("enumStorePath")
+          ? { path: value("enumStorePath"), table: value("enumStoreTable") || "hits" }
+          : undefined,
+      };
+    }
+
     return {
       mode: "bot",
       action: value("action"),
@@ -701,17 +804,19 @@
   });
 
   // ---- mode --------------------------------------------------------------
+  var MODES = ["scrape", "bot", "enumerate"];
   function setMode(next) {
     mode = next;
     document.body.className = "mode-" + next;
-    $("tab-scrape").setAttribute("aria-pressed", String(next === "scrape"));
-    $("tab-bot").setAttribute("aria-pressed", String(next === "bot"));
-    $("pane-scrape").hidden = next !== "scrape";
-    $("pane-bot").hidden = next !== "bot";
+    MODES.forEach(function (m) {
+      $("tab-" + m).setAttribute("aria-pressed", String(m === next));
+      $("pane-" + m).hidden = m !== next;
+    });
     save();
   }
-  $("tab-scrape").onclick = function () { setMode("scrape"); };
-  $("tab-bot").onclick = function () { setMode("bot"); };
+  MODES.forEach(function (m) {
+    $("tab-" + m).onclick = function () { setMode(m); };
+  });
 
   // ---- runs --------------------------------------------------------------
   function listen(id) {
@@ -735,6 +840,7 @@
       setStatus("run <b>" + id + "</b> " + data.status + (data.summary ? " — " + data.summary : ""), false);
       setChips(data.stats || {});
       showRows(data.rows);
+      offerSeeds(data.rows, data.seedUrls);
       showShots(id, data.shots);
       // Pictures are the point of taking them: if a run produced any, put
       // them in front rather than behind a tab nobody clicked.

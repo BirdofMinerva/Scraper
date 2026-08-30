@@ -159,6 +159,7 @@ export function createRuns() {
             error: run.error,
             rows: run.result?.rows?.slice(0, 50) ?? [],
             shots: (run.result?.shots ?? []).map((file) => path.basename(file)),
+            seedUrls: run.result?.seedUrls ?? [],
             stats: run.stats,
           });
         }
@@ -282,8 +283,8 @@ export function createServer(store = createRuns()) {
 
       if (route === "POST /api/runs") {
         const config = (await readBody(req)) as JobConfig;
-        if (config?.mode !== "scrape" && config?.mode !== "bot") {
-          return json(res, 400, { error: "mode must be scrape or bot" });
+        if (config?.mode !== "scrape" && config?.mode !== "bot" && config?.mode !== "enumerate") {
+          return json(res, 400, { error: "mode must be scrape, bot or enumerate" });
         }
         try {
           // Validated here so a bad config is a red line in the form rather
@@ -327,6 +328,7 @@ export function createServer(store = createRuns()) {
             error: run.error,
             rows: run.result?.rows?.slice(0, 50) ?? [],
             shots: (run.result?.shots ?? []).map((file) => path.basename(file)),
+            seedUrls: run.result?.seedUrls ?? [],
             stats: run.stats,
           });
         }
