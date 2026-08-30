@@ -25,6 +25,7 @@ again when the project changes hands.
 - [turnstile.ts](#turnstilets) — get past a Cloudflare interstitial
 - [accounts.ts](#accountsts) — one login per fingerprint
 - [actions.ts](#actionsts) — what a browser does once signed in
+- [ffuf.ts](#ffufts) — enumerate subdomains and paths from a wordlist (`npm run enum`)
 - [The dashboard](#the-dashboard) — `npm run dash`
 - [storage.ts](#storagets) — rows into a database
 - [clean.ts](#cleants) — empty the databases
@@ -95,15 +96,49 @@ the machine has none, and SQLite ships with Node.
 
 ## Install
 
+**You need Node 22 or newer.** Check with `node -v`. The databases use Node's
+built-in `node:sqlite`, which older versions do not have.
+
 ```sh
-npm install
-npx playwright install chromium firefox webkit
-npm test
+npm install                                    # 1. the three dependencies
+npx playwright install chromium firefox webkit # 2. the actual browsers (~1GB)
+npm test                                       # 3. check it works
 ```
 
-Dependencies are `playwright`, `playwright-extra` and
-`puppeteer-extra-plugin-stealth`. On a headless Linux box you also want
-`apt install xvfb` (see [Display handling](#display-handling)).
+Step 2 is the one people skip. `npm install` fetches the *library*; the
+browsers it drives are a separate download, and without them every launch
+fails.
+
+If step 3 ends with `fail 0`, you are done. Start here:
+
+```sh
+npm run dash     # the dashboard on http://127.0.0.1:8420 - easiest way in
+```
+
+### Two extras, depending on what you need
+
+**Headless Linux server** (no monitor attached): `sudo apt install xvfb`.
+Browsers need a display; `launchProfile` starts a virtual one for you, but only
+if Xvfb is installed. On a desktop machine you can ignore this. See
+[Display handling](#display-handling).
+
+**Subdomain and path enumeration** ([`ffuf.ts`](#ffufts), and the dashboard's
+Enumerate mode): install the `ffuf` binary and make sure it is on your `PATH`.
+
+```sh
+sudo apt install ffuf     # or: brew install ffuf, or go install …/ffuf/v2@latest
+ffuf -V                   # should print a version
+```
+
+Everything else works without it — only enumeration needs it. Set `FFUF_BIN` if
+it lives somewhere unusual.
+
+### What gets installed
+
+Three dependencies, deliberately: `playwright`, `playwright-extra` and
+`puppeteer-extra-plugin-stealth`. Everything else — the HTTP server, the
+databases, the test runner — is Node's standard library, so there is no build
+step and nothing to configure.
 
 ---
 
@@ -943,9 +978,92 @@ steps.
 
 ---
 
+## ffuf.ts
+
+A crawl is only as good as the URLs it starts from, and most of them are named
+rather than numbered — `/index.html`, `/admin`, `/products` — so there is
+nothing to count through. `ffuf.ts` finds those names, from a wordlist, in the
+two shapes this toolkit needs:
+
+```ts
+import { fuzzPaths, enumerateSubdomains } from "./ffuf";
+
+// https://site/FUZZ
+const paths = await fuzzPaths("https://example.com/", { wordlist: "common.txt" });
+
+// https://FUZZ.example.com/
+const subs = await enumerateSubdomains("example.com", { wordlist: "subs.txt" });
+```
+
+Both return a flat, typed `FfufResult[]` — `input` (the word that matched),
+`url`, `host`, `status`, `length`, `words`, `lines`, and `contentType` — which
+`storage.ts` can write and a later run can diff.
+
+**It points ffuf at whatever you give it.** ffuf is a request cannon and there
+is no authorisation check in the module: aim it only at hosts you are allowed
+to test. The defaults are deliberately unheroic for the same reason — 100
+requests a second and 40 threads, both overridable, because the fastest way to
+turn a scrape into an outage (or into a block) is to arrive at full speed.
+
+### Why a wrapper and not just the binary
+
+ffuf's own output is a spinner and a wall of coloured lines: useful in a
+terminal, useless to a program. The wrapper runs it non-interactively, asks for
+`-of json` written to a temp file, and parses that file. The JSON file stays
+the authoritative result even when hits also stream live, so the returned array
+is never assembled from screen-scraped output.
+
+Argument building (`buildFfufArgs`), JSON parsing (`parseFfufJson`) and the
+live-line parse (`parseFfufLine`) are pure and network-free, so the flags, the
+URL shaping and the result mapping are all tested without spawning anything —
+the same split `routes.ts` keeps beside `proxies.ts`.
+
+### Streaming, cancellation, and stopping
+
+An optional `onResult` fires once per hit as ffuf finds it, which is what lets
+the dashboard report a run live and write rows as they arrive instead of
+sitting silent and then producing everything at once:
+
+```ts
+await fuzzPaths(base, {
+  wordlist,
+  onResult: (hit) => console.log(hit.status, hit.url),
+  signal: controller.signal,
+});
+```
+
+Omitting `onResult` leaves the quiet path exactly as it was — `-s` stays on and
+stdout is ignored. Passing it drops `-s` so ffuf prints full result lines to
+parse. Streamed hits and the final array agree on identity (`input`, `url`,
+`host`, `status`, `length`, `words`, `lines`); `contentType` and
+`redirectLocation` exist only in the JSON, so take those from the returned
+array rather than from a streamed hit.
+
+`signal` (an `AbortSignal`) and `timeoutMs` both kill the process and reject.
+A stop is therefore not a silent truncation — the caller decides what a partial
+run means, and the dashboard keeps the hits found so far rather than discarding
+them.
+
+### enumerate.ts
+
+The same thing from a terminal:
+
+```sh
+npm run enum -- example.com --mode=subdomain --wordlist=subs.txt
+npx tsx enumerate.ts https://example.com/ --wordlist=common.txt --match=200,301
+```
+
+`--mode` is inferred from the target when omitted — a bare domain enumerates
+subdomains, a URL fuzzes paths. `--threads`, `--rate`, `--match`, `--filter`,
+`--fs`, `--fw` and `--timeout` map onto the options above; `--json` prints the
+raw results instead of a table. Results go to stdout and the status line to
+stderr, so it pipes cleanly.
+
+---
+
 ## The dashboard
 
-A local web UI for the whole toolkit: two modes, a form each, and the run's
+A local web UI for the whole toolkit: three modes, a form each, and the run's
 output streaming into a terminal panel.
 
 ```sh
@@ -955,7 +1073,7 @@ npx tsx server.ts --port=9000             # somewhere else
 
 Three files. `server.ts` is `node:http` — no framework, no build step — and
 serves `dashboard.html`, a single page with no dependencies of its own.
-`jobs.ts` holds the two run shapes and, crucially, the validation: a config
+`jobs.ts` holds the three run shapes and, crucially, the validation: a config
 that cannot work is refused in the form rather than three minutes into a crawl.
 
 **It binds to 127.0.0.1 and has no authentication**, because it can launch
@@ -998,6 +1116,20 @@ The site itself is either a preset from `login-sites.ts` (which fills the URLs
 and carries a note about what makes that site awkward) or described by hand:
 login and signup URLs, checkboxes to tick, selector overrides, and *signed in
 when the URL contains* for sites with no sign-out link to find.
+
+### Enumerate mode
+
+The [`ffuf.ts`](#ffufts) wrapper with a form. A target (a bare domain for
+subdomains, a URL for paths — the mode follows from which), a wordlist, and the
+usual knobs: threads, rate, which statuses to match or filter, and an optional
+SQLite file to write hits to. The ffuf defaults show as placeholders, so you
+can see what you get before you touch anything.
+
+Hits appear in the results table as ffuf finds them, not all at once when it
+finishes, and **Stop** keeps what was found so far rather than throwing the run
+away. Because most discovered URLs are the named pages a crawl wants to start
+from, a finished run offers a one-click **use the discovered URLs as scrape
+seeds** — it switches to Scrape mode with the URLs already filled in.
 
 ### Once signed in
 
@@ -1292,10 +1424,14 @@ npm run clean -- --list   # what data is on disk; --handoff clears it
 npx tsx login-test.ts  # sign in to nine real practice sites, both ways
 ```
 
-328 tests on `node:test`, no framework dependency. 230 of them are pure logic
+383 tests on `node:test`, no framework dependency. 285 of them are pure logic
 (`browsers`, `storage`, `proxies`, `routes`, `detect`, `targets`, `accounts`,
-`login-sites`, `jobs`, `clean`, `actions`) and run in under half a second; the
-rest launch real browsers and take about seven minutes.
+`login-sites`, `jobs`, `clean`, `actions`, `ffuf`) and run in about a second;
+the rest launch real browsers and take roughly eleven minutes.
+
+Four of the `ffuf` tests shell the real binary and are skipped unless you ask
+for them with `FFUF_LIVE=1`, so the default run needs neither ffuf nor a
+network.
 
 The browser files run with `--test-concurrency=1`. `node:test` parallelises
 files by default, and with crawl opening six browsers while stack, missions and
@@ -1317,7 +1453,8 @@ pass alone and fail together. Serialising that half made it deterministic.
 | `accounts.test.ts` | identity generation, the book's uniqueness rules, selector ordering |
 | `accounts-flow.test.ts` | signup and sign-in in a real browser, challenges mid-flow, awkward form shapes, actions after login, a browser each |
 | `login-sites.test.ts` | the practice-login catalogue: unique names, https, `--only` |
-| `jobs.test.ts` | dashboard configs: credential lists, page ranges, one IP per browser |
+| `ffuf.test.ts` | flag building, URL shaping, JSON and live-line parsing, streaming reconciliation |
+| `jobs.test.ts` | dashboard configs: credential lists, page ranges, named start URLs, one IP per browser, enumerate validation and result shaping |
 | `server.test.ts` | the HTTP API, the event stream, and one real run through it |
 | `clean.test.ts` | listing, deleting with sidecars, emptying, and leaving no trace |
 | `actions.test.ts` | action lists from a half-filled form, and screenshot filenames |
