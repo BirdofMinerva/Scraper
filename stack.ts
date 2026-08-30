@@ -12,6 +12,7 @@
  *   npx tsx stack.ts --kind=mixed --count=6 --url=https://example.com
  */
 import type { Browser, BrowserContext, Page } from "playwright";
+import { ConfigError } from "./errors";
 import {
   filterProfiles,
   getProfile,
@@ -99,7 +100,7 @@ export function planStack(options: StackOptions = {}): BrowserProfile[] {
     const chosen = options.profiles.map((p) => (typeof p === "string" ? getProfile(p) : p));
     const ids = new Set(chosen.map((p) => p.id));
     if (ids.size !== chosen.length && !allowDuplicates) {
-      throw new Error(
+      throw new ConfigError(
         `Asked for the same fingerprint twice: ${chosen.map((p) => p.id).join(", ")}. ` +
           `Pass allowDuplicates if that is deliberate.`
       );
@@ -112,10 +113,10 @@ export function planStack(options: StackOptions = {}): BrowserProfile[] {
 
   const pool = filterProfiles(filter);
   if (pool.length === 0) {
-    throw new Error(`No profiles match kind "${kind}"${options.engine ? ` on ${options.engine}` : ""}`);
+    throw new ConfigError(`No profiles match kind "${kind}"${options.engine ? ` on ${options.engine}` : ""}`);
   }
   if (count > pool.length && !allowDuplicates) {
-    throw new Error(
+    throw new ConfigError(
       `Asked for ${count} browsers but only ${pool.length} distinct ${kind} profiles exist. ` +
         `Pass allowDuplicates to reuse fingerprints, or lower count.`
     );
@@ -135,7 +136,7 @@ export async function openStack(options: StackOptions = {}): Promise<Stack> {
     options.proxies.length < profiles.length &&
     !options.allowSharedProxies
   ) {
-    throw new Error(
+    throw new ConfigError(
       `${profiles.length} browsers but only ${options.proxies.length} route` +
         `${options.proxies.length === 1 ? "" : "s"}. Two browsers would leave from the same IP. ` +
         `Add routes, lower count, or pass allowSharedProxies.`
@@ -213,7 +214,7 @@ function parseArgs(argv: string[]) {
 
   const kind = (get("kind") ?? "mixed") as StackKind;
   if (!(kind in KINDS)) {
-    throw new Error(`Unknown --kind=${kind}. Options: ${Object.keys(KINDS).join(", ")}`);
+    throw new ConfigError(`Unknown --kind=${kind}. Options: ${Object.keys(KINDS).join(", ")}`);
   }
 
   return {

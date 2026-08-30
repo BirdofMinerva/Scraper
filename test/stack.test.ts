@@ -1,6 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { planStack, openStack } from "../stack";
+import { ConfigError } from "../errors";
 
 const MINUTE = 60_000;
 
@@ -77,5 +78,12 @@ describe("openStack", { timeout: 5 * MINUTE }, () => {
     } finally {
       await stack.close();
     }
+  });
+});
+
+describe("typed errors", () => {
+  test("asking for more browsers than profiles is a ConfigError, message unchanged", () => {
+    assert.throws(() => planStack({ count: 999 }), ConfigError);
+    assert.throws(() => planStack({ count: 999 }), /distinct/);
   });
 });

@@ -15,6 +15,7 @@
  *   );
  */
 import type { Browser, BrowserContext, Page } from "playwright";
+import { ChallengeError } from "./errors";
 import {
   launchProfile,
   profileRotator,
@@ -290,7 +291,7 @@ async function attemptOnce<T>(
         // letting `run` scrape the interstitial produces rows of nothing and
         // spends no retry. Retrying moves to a new profile and proxy, which
         // is exactly what an unresolved challenge calls for.
-        if (!outcome.passed) throw new Error(`challenge not passed: ${outcome.detail}`);
+        if (!outcome.passed) throw new ChallengeError(`challenge not passed: ${outcome.detail}`);
       }
       // ...nor act the instant it paints.
       await human.pause(900);

@@ -18,6 +18,7 @@ again when the project changes hands.
 
 - [Codebase map (start here)](#codebase-map-start-here)
 - [Install](#install)
+- [Using it as a library](#using-it-as-a-library) — install, import, and the error types
 - [missions.ts](#missionsts) — send fingerprints at a page, bring back a result
 - [proxies.ts](#proxiests) — route browsers through other IPs
 - [stack.ts](#stackts) — open a batch of browsers to drive by hand
@@ -139,6 +140,155 @@ Three dependencies, deliberately: `playwright`, `playwright-extra` and
 `puppeteer-extra-plugin-stealth`. Everything else — the HTTP server, the
 databases, the test runner — is Node's standard library, so there is no build
 step and nothing to configure.
+
+---
+
+## Using it as a library
+
+Everything the dashboard does is a composable API underneath. Install it, import
+from the package root, and drive the same engine from your own code.
+
+### Install
+
+```sh
+npm install @birdofminerva/scraper playwright
+npx playwright install chromium firefox webkit   # the browsers themselves
+```
+
+`playwright` is a **peer dependency** — you install it (and its browsers)
+yourself, so the version and the download are under your control. **Node 22 or
+newer** is required (the storage layer uses the built-in `node:sqlite`). The
+package ships both ESM and CommonJS, so `import` and `require` both work:
+
+```ts
+import { crawl, sqliteStore, pageRange } from "@birdofminerva/scraper";
+// const { crawl } = require("@birdofminerva/scraper");  // CJS, same names
+```
+
+Every name below is exported from the package root — there are no deep imports
+to remember. On a headless Linux box also install Xvfb; a virtual display is
+started for you (see [Display handling](#display-handling)).
+
+### Thirty seconds in
+
+Point a pool of fingerprinted browsers at one site and collect rows:
+
+```ts
+import { crawl, pageRange, sqliteStore } from "@birdofminerva/scraper";
+
+const store = sqliteStore({ path: "products.db", table: "products" });
+
+const result = await crawl({
+  start: pageRange((n) => `https://shop.example/list?page=${n}`, 1, 40),
+  browsers: 6,
+  key: (row) => String(row.id),          // de-duplicate across pages
+  extract: async ({ page }) =>
+    page.$$eval(".product", (els) =>
+      els.map((el) => ({
+        id: el.getAttribute("data-id"),
+        name: el.querySelector(".name")?.textContent?.trim(),
+      })),
+    ),
+  store,
+});
+
+console.log(`${result.rows.length} products`);
+await store.close();
+```
+
+Six different fingerprints, work claimed from a shared queue, one per-host rate
+limiter across all of them, rows written to SQLite as they are found. See
+[`crawl.ts`](#crawlts) for retries, proxies, `follow`, and challenge handling.
+
+### One page, many times
+
+When you want the same page visited by many machines rather than a site walked
+once, use a mission ([`missions.ts`](#missionsts)):
+
+```ts
+import { defineMission, runMission, partition } from "@birdofminerva/scraper";
+
+const results = await runMission(
+  defineMission({
+    name: "title",
+    url: "https://example.com",
+    run: async ({ page }) => ({ title: await page.title() }),
+  }),
+  { runs: 6, concurrency: 3 },
+);
+
+const { values, failures } = partition(results);
+```
+
+### The building blocks
+
+Each is documented in full in its own section; from the package they are:
+
+| Import | Does | Section |
+| --- | --- | --- |
+| `crawl`, `pageRange` | many browsers over one site | [crawl.ts](#crawlts) |
+| `defineMission`, `runMission`, `runEach`, `partition` | one page, many runs | [missions.ts](#missionsts) |
+| `launchProfile`, `getProfile`, `PROFILES`, `randomProfile` | a fingerprinted browser | [browsers.ts](#browsersts) |
+| `openStack` | a batch of browsers to drive by hand | [stack.ts](#stackts) |
+| `sqliteStore`, `jsonlStore`, `csvStore`, `memoryStore`, `multiStore` | where rows land | [storage.ts](#storagets) |
+| `resolveProxy`, `proxyPool`, `parseRoutes` | route through other IPs | [proxies.ts](#proxiests) |
+| `accountBook`, `createAccounts`, `signInEach`, `defineSite` | one login per browser | [accounts.ts](#accountsts) |
+| `parseActions`, `runActions` | what a browser does once in | [actions.ts](#actionsts) |
+| `passChallenge`, `gotoAndPass` | past a Cloudflare interstitial | [turnstile.ts](#turnstilets) |
+| `fuzzPaths`, `enumerateSubdomains` | discover URLs to scrape | [ffuf.ts](#ffufts) |
+
+Types come with them — `CrawlOptions`, `Mission`, `Store`, `FfufResult`,
+`ProxyLike`, and the rest are all exported (`import type { … }`).
+
+### Handling failures by kind
+
+Failures at the library's public boundary — bad config, a browser that won't
+launch, an interstitial it could not pass, an ffuf run that failed — are thrown
+as `ScraperError` subclasses, each with a stable `.code`, so you can branch on
+*what* went wrong instead of matching message strings:
+
+```ts
+import {
+  crawl,
+  ConfigError,
+  LaunchError,
+  ChallengeError,
+  FfufError,
+  ScraperError,
+} from "@birdofminerva/scraper";
+
+try {
+  await crawl(options);
+} catch (err) {
+  if (err instanceof ConfigError)         throw err;         // options are wrong - retrying won't help
+  else if (err instanceof LaunchError)    console.error("no browser/display:", err.message);
+  else if (err instanceof ChallengeError) console.warn("interstitial not passed");
+  else if (err instanceof ScraperError)   console.error(err.code, err.message);
+  else throw err;                                            // not ours (e.g. AbortError on cancel)
+}
+```
+
+The taxonomy: `ScraperError` (base, carries `.code`) with `ConfigError`
+(`"CONFIG"`), `LaunchError` (`"LAUNCH"`), `ProxyError` (`"PROXY"`),
+`ChallengeError` (`"CHALLENGE"`), `FfufError` (`"FFUF"`) and `StorageError`
+(`"STORAGE"`). Cancellation is the one exception — an aborted run rejects with a
+standard `AbortError` (name `"AbortError"`), the web-platform convention, not a
+`ScraperError`. Pass an `AbortSignal` (crawl, missions and ffuf all take one) to
+stop a run cleanly.
+
+Not every hiccup is a thrown `ScraperError`: an individual page or attempt that
+fails inside a crawl or mission is not thrown at all — it lands in
+`result.failures` so one bad URL never sinks the run — and a per-attempt timeout
+stays a plain `Error`. The thrown `ScraperError`s are the ones that stop the
+whole call.
+
+### What is not exported
+
+The application layer — the dashboard server (`server.ts`), the job runner
+(`jobs.ts`), and the CLI entrypoints — is intentionally not part of the package
+API; it is how the app runs, not something to build against. To use those, run
+the app itself: `npm run dash` for the dashboard, `npm run enum` for
+enumeration (see [The dashboard](#the-dashboard) and [`enumerate.ts`](#enumeratets)).
 
 ---
 
@@ -1451,10 +1601,11 @@ npm run clean -- --list   # what data is on disk; --handoff clears it
 npx tsx login-test.ts  # sign in to nine real practice sites, both ways
 ```
 
-402 tests on `node:test`, no framework dependency. 304 of them are pure logic
+457 tests on `node:test`, no framework dependency. 357 of them are pure logic
 (`browsers`, `storage`, `proxies`, `routes`, `detect`, `targets`, `accounts`,
-`login-sites`, `jobs`, `clean`, `actions`, `ffuf`) and run in about a second;
-the rest launch real browsers and take roughly eleven minutes.
+`login-sites`, `jobs`, `clean`, `actions`, `ffuf`, `errors`, and the public
+`index` barrel) and run in about a second; the rest launch real browsers and
+take roughly eleven minutes.
 
 Four of the `ffuf` tests shell the real binary and are skipped unless you ask
 for them with `FFUF_LIVE=1`, so the default run needs neither ffuf nor a
@@ -1485,6 +1636,8 @@ pass alone and fail together. Serialising that half made it deterministic.
 | `server.test.ts` | the HTTP API, the event stream, and one real run through it |
 | `clean.test.ts` | listing, deleting with sidecars, emptying, and leaving no trace |
 | `actions.test.ts` | action lists from a half-filled form, and screenshot filenames |
+| `errors.test.ts` | the error taxonomy: subclass instanceof, codes, names, message and cause preserved |
+| `index.test.ts` | the public barrel: every intended export present, error classes wired, app layer not leaked |
 | `targets.test.ts` | catalogue integrity, target filters, control injection |
 
 What they assert, beyond the obvious:

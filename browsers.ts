@@ -27,6 +27,7 @@ import {
 } from "playwright";
 import { addExtra } from "playwright-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
+import { ConfigError, LaunchError } from "./errors";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 
 export type Engine = "chromium" | "firefox" | "webkit";
@@ -595,7 +596,7 @@ export const PROFILES: BrowserProfile[] = [
 export function getProfile(id: string): BrowserProfile {
   const profile = PROFILES.find((p) => p.id === id);
   if (!profile) {
-    throw new Error(
+    throw new ConfigError(
       `Unknown browser profile "${id}". Known: ${PROFILES.map((p) => p.id).join(", ")}`
     );
   }
@@ -629,7 +630,7 @@ export function randomProfile(
 ): BrowserProfile {
   const pool = filterProfiles(filter);
   if (pool.length === 0) {
-    throw new Error("No browser profile matches the given filter");
+    throw new ConfigError("No browser profile matches the given filter");
   }
   return pool[Math.floor(Math.random() * pool.length)];
 }
@@ -644,7 +645,7 @@ export function profileRotator(
 ): () => BrowserProfile {
   const pool = filterProfiles(filter);
   if (pool.length === 0) {
-    throw new Error("No browser profile matches the given filter");
+    throw new ConfigError("No browser profile matches the given filter");
   }
 
   let queue: BrowserProfile[] = [];
@@ -1163,7 +1164,7 @@ export function ensureDisplay(): void {
 
   if (spawnSync("which", ["Xvfb"], { encoding: "utf8" }).status !== 0) {
     if (current) return; // too small, but it is all we have
-    throw new Error(
+    throw new LaunchError(
       "Headed browsers need a display: set DISPLAY, or install Xvfb " +
         "(`apt install xvfb`) so one can be started automatically."
     );

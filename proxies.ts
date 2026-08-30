@@ -8,6 +8,7 @@
  * and the destination.
  */
 import net from "node:net";
+import { ProxyError } from "./errors";
 import tls from "node:tls";
 import http from "node:http";
 import { URL } from "node:url";
@@ -86,7 +87,7 @@ function connectThrough(
         if (rest.length) socket.unshift(rest);
         resolve();
       } else {
-        reject(new Error(`CONNECT ${target} rejected with ${status}`));
+        reject(new ProxyError(`CONNECT ${target} rejected with ${status}`));
       }
     };
 
@@ -111,7 +112,7 @@ async function dialChain(hops: ProxyHop[], target: string): Promise<net.Socket> 
   const parsed = hops.map(parseHop);
   const socks = parsed.findIndex((hop) => hop.socks);
   if (socks !== -1) {
-    throw new Error(
+    throw new ProxyError(
       `hop ${socks + 1} is SOCKS; chains are HTTP CONNECT only. ` +
         "Use a single SOCKS proxy on its own, which Playwright supports natively."
     );
@@ -234,7 +235,7 @@ export async function startProxyChain(
  */
 export async function resolveProxy(proxy: ProxyLike): Promise<ActiveProxy> {
   const hops = asHops(proxy);
-  if (hops.length === 0) throw new Error("proxy chain is empty");
+  if (hops.length === 0) throw new ProxyError("proxy chain is empty");
 
   if (hops.length === 1) {
     const [hop] = hops;
@@ -255,7 +256,7 @@ export async function resolveProxy(proxy: ProxyLike): Promise<ActiveProxy> {
 
 /** Round-robin over a list of proxies or chains, in order. */
 export function proxyPool(proxies: ProxyLike[]): () => ProxyLike {
-  if (proxies.length === 0) throw new Error("proxy pool is empty");
+  if (proxies.length === 0) throw new ProxyError("proxy pool is empty");
   let index = 0;
   return () => proxies[index++ % proxies.length];
 }

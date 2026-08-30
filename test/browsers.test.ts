@@ -6,6 +6,7 @@ import {
   contextOptionsFor, syncUserAgent, hardeningScript, launchOptionsFor, selectEvasions,
   localeFor, acceptLanguageFor,
 } from "../browsers";
+import { ConfigError } from "../errors";
 
 describe("catalog", () => {
   test("ids are unique", () => {
@@ -294,5 +295,15 @@ describe("evasion selection", () => {
   test("names absent from the build are not invented", () => {
     assert.deepEqual(selectEvasions(["chrome.app"], "chrome"), ["chrome.app"]);
     assert.deepEqual(selectEvasions([], "all"), []);
+  });
+});
+
+describe("typed errors", () => {
+  test("an unknown profile id is a ConfigError, message unchanged", () => {
+    assert.throws(() => getProfile("nope"), ConfigError);
+    assert.throws(() => getProfile("nope"), /Unknown browser profile/);
+  });
+  test("a filter matching no profile is a ConfigError", () => {
+    assert.throws(() => randomProfile({ formFactor: "watch" as any }), ConfigError);
   });
 });

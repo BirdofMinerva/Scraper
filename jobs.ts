@@ -11,6 +11,7 @@
  * minutes into a run.
  */
 import { crawl, pageRange } from "./crawl";
+import { ConfigError } from "./errors";
 import { sqliteStore, type Row } from "./storage";
 import {
   accountBook,
@@ -248,16 +249,16 @@ export function startUrls(config: ScrapeConfig): string[] {
   if (config.range?.pattern) {
     const { pattern, from, to } = config.range;
     if (!pattern.includes("{n}")) {
-      throw new Error('The page range pattern needs an {n} where the number goes');
+      throw new ConfigError('The page range pattern needs an {n} where the number goes');
     }
-    if (!(to >= from)) throw new Error("The page range ends before it starts");
-    if (to - from > 5000) throw new Error("That page range is over 5000 pages; narrow it");
+    if (!(to >= from)) throw new ConfigError("The page range ends before it starts");
+    if (to - from > 5000) throw new ConfigError("That page range is over 5000 pages; narrow it");
     urls.push(...pageRange((n) => pattern.replace(/\{n\}/g, String(n)), from, to));
   }
 
-  if (urls.length === 0) throw new Error("Give at least one URL, or a page range");
+  if (urls.length === 0) throw new ConfigError("Give at least one URL, or a page range");
   for (const url of urls) {
-    if (!/^https?:\/\//i.test(url)) throw new Error(`Not a URL: ${url.slice(0, 60)}`);
+    if (!/^https?:\/\//i.test(url)) throw new ConfigError(`Not a URL: ${url.slice(0, 60)}`);
   }
   return urls;
 }
@@ -280,7 +281,7 @@ function checkRoutes(raw: string | undefined, browsers: number, allowShared?: bo
   if (routes.length === 0) return;
 
   if (routes.length < browsers && !allowShared) {
-    throw new Error(
+    throw new ConfigError(
       `${browsers} browsers but ${routes.length} route${routes.length === 1 ? "" : "s"} - ` +
         `two browsers would leave from the same IP. Add routes, lower the browser count, ` +
         `or tick "let browsers share a route".`
@@ -292,7 +293,7 @@ function checkRoutes(raw: string | undefined, browsers: number, allowShared?: bo
   const seen = new Set<string>();
   for (const route of routes) {
     const key = describeRoute(route);
-    if (seen.has(key)) throw new Error(`The route ${key} is in the list twice`);
+    if (seen.has(key)) throw new ConfigError(`The route ${key} is in the list twice`);
     seen.add(key);
   }
 }
@@ -352,13 +353,13 @@ export async function verifyRoutes(raw: string | undefined, ctx: JobContext): Pr
 export function resolveSite(config: BotConfig): { spec: AuthSpec; credentials?: Credentials } {
   if (config.preset) {
     const site = LOGIN_SITES.find((s) => s.spec.name === config.preset);
-    if (!site) throw new Error(`Unknown preset "${config.preset}"`);
+    if (!site) throw new ConfigError(`Unknown preset "${config.preset}"`);
     return { spec: site.spec, credentials: site.credentials };
   }
 
   const site = config.site;
-  if (!site?.loginUrl) throw new Error("Give a login URL, or pick a preset");
-  if (!/^https?:\/\//i.test(site.loginUrl)) throw new Error("The login URL is not a URL");
+  if (!site?.loginUrl) throw new ConfigError("Give a login URL, or pick a preset");
+  if (!/^https?:\/\//i.test(site.loginUrl)) throw new ConfigError("The login URL is not a URL");
 
   const includes = site.signedInUrlIncludes?.trim();
   return {
@@ -385,74 +386,74 @@ export function resolveSite(config: BotConfig): { spec: AuthSpec; credentials?: 
 export function validate(config: JobConfig): void {
   if (config.mode === "scrape") {
     startUrls(config);
-    if (!config.rowSelector?.trim()) throw new Error("Give a selector for the repeating row");
-    if (!config.fields?.length) throw new Error("Add at least one field to extract");
+    if (!config.rowSelector?.trim()) throw new ConfigError("Give a selector for the repeating row");
+    if (!config.fields?.length) throw new ConfigError("Add at least one field to extract");
     for (const field of config.fields) {
-      if (!field.name?.trim()) throw new Error("Every field needs a name");
+      if (!field.name?.trim()) throw new ConfigError("Every field needs a name");
     }
     if (config.key && !config.fields.some((f) => f.name === config.key)) {
-      throw new Error(`The dedupe key "${config.key}" is not one of the fields`);
+      throw new ConfigError(`The dedupe key "${config.key}" is not one of the fields`);
     }
-    if ((config.browsers ?? 1) < 1) throw new Error("At least one browser");
+    if ((config.browsers ?? 1) < 1) throw new ConfigError("At least one browser");
     checkRoutes(config.proxies, config.browsers ?? 3, config.allowSharedProxies);
     return;
   }
 
   if (config.mode === "enumerate") {
     const target = config.target?.trim();
-    if (!target) throw new Error("Give a target domain or URL to enumerate");
+    if (!target) throw new ConfigError("Give a target domain or URL to enumerate");
     if (config.enumMode !== "subdomain" && config.enumMode !== "path") {
-      throw new Error('Enumerate mode must be "subdomain" or "path"');
+      throw new ConfigError('Enumerate mode must be "subdomain" or "path"');
     }
     // A path fuzz needs somewhere to put FUZZ, and that is a URL. A subdomain
     // fuzz takes a bare domain and would be wrong with a scheme on it.
     if (config.enumMode === "path" && !/^https?:\/\//i.test(target)) {
-      throw new Error("Path fuzzing needs a base URL, e.g. https://site/ or https://site/FUZZ");
+      throw new ConfigError("Path fuzzing needs a base URL, e.g. https://site/ or https://site/FUZZ");
     }
     if (config.enumMode === "subdomain" && /^https?:\/\//i.test(target)) {
-      throw new Error("Subdomain fuzzing takes a bare domain, e.g. example.com - drop the scheme");
+      throw new ConfigError("Subdomain fuzzing takes a bare domain, e.g. example.com - drop the scheme");
     }
     // A wordlist or an input command - ffuf needs one source of candidates, and
     // `inputCmd` overrides the wordlist, so either alone is enough.
     const hasWordlist = !!config.wordlist?.trim();
     const hasInputCmd = !!config.inputCmd?.trim();
     if (!hasWordlist && !hasInputCmd) {
-      throw new Error("Give a wordlist path, or an input command to generate candidates");
+      throw new ConfigError("Give a wordlist path, or an input command to generate candidates");
     }
     if (hasInputCmd) {
       if (config.inputNum === undefined) {
-        throw new Error("An input command needs an input count - how many candidates it yields");
+        throw new ConfigError("An input command needs an input count - how many candidates it yields");
       }
       if (!Number.isInteger(config.inputNum) || config.inputNum < 1) {
-        throw new Error("The input count must be a positive whole number");
+        throw new ConfigError("The input count must be a positive whole number");
       }
     }
     // Recursion walks into discovered directories, which only exists for paths.
     if (config.recursion && config.enumMode === "subdomain") {
-      throw new Error("Recursion only applies to path fuzzing, not subdomain enumeration");
+      throw new ConfigError("Recursion only applies to path fuzzing, not subdomain enumeration");
     }
     if (config.recursionDepth !== undefined && config.recursionDepth < 1) {
-      throw new Error("Recursion depth must be at least 1");
+      throw new ConfigError("Recursion depth must be at least 1");
     }
-    if (config.threads !== undefined && config.threads < 1) throw new Error("At least one thread");
-    if (config.rate !== undefined && config.rate < 0) throw new Error("Rate cannot be negative");
+    if (config.threads !== undefined && config.threads < 1) throw new ConfigError("At least one thread");
+    if (config.rate !== undefined && config.rate < 0) throw new ConfigError("Rate cannot be negative");
     return;
   }
 
   const { spec } = resolveSite(config);
   if (config.action === "create" && !spec.signupUrl) {
-    throw new Error(`${spec.name} has no signup URL, so accounts cannot be created there`);
+    throw new ConfigError(`${spec.name} has no signup URL, so accounts cannot be created there`);
   }
   if (config.action === "preset") {
-    if (!config.preset) throw new Error("Pick a preconfigured site for that action");
+    if (!config.preset) throw new ConfigError("Pick a preconfigured site for that action");
     const site = LOGIN_SITES.find((s) => s.spec.name === config.preset);
-    if (!site) throw new Error(`Unknown preset "${config.preset}"`);
+    if (!site) throw new ConfigError(`Unknown preset "${config.preset}"`);
   }
   if (config.action === "list") {
     const credentials = parseCredentials(config.credentials ?? "");
-    if (credentials.length === 0) throw new Error("Paste some credentials, as user:pass per line");
+    if (credentials.length === 0) throw new ConfigError("Paste some credentials, as user:pass per line");
     if (credentials.length < (config.browsers ?? credentials.length)) {
-      throw new Error(
+      throw new ConfigError(
         `${config.browsers} browsers but ${credentials.length} credentials - two browsers would share a login`
       );
     }
@@ -460,9 +461,9 @@ export function validate(config: JobConfig): void {
       .slice(0, config.browsers ?? credentials.length)
       .map((c) => (c.email ?? c.username ?? "").toLowerCase());
     const repeated = ids.find((id, i) => ids.indexOf(id) !== i);
-    if (repeated) throw new Error(`"${repeated}" is in the credential list twice`);
+    if (repeated) throw new ConfigError(`"${repeated}" is in the credential list twice`);
   }
-  if ((config.browsers ?? 1) < 1) throw new Error("At least one browser");
+  if ((config.browsers ?? 1) < 1) throw new ConfigError("At least one browser");
   checkRoutes(config.proxies, config.browsers ?? 3, config.allowSharedProxies);
   parseActions(config.actions);
 }
@@ -624,10 +625,10 @@ export async function runBot(config: BotConfig, ctx: JobContext): Promise<JobRes
     } else if (config.action === "create") {
       results = await createAccounts(spec, options);
     } else if (config.action === "ensure") {
-      if (!book) throw new Error("Signing in or registering needs an account book to remember which is which");
+      if (!book) throw new ConfigError("Signing in or registering needs an account book to remember which is which");
       results = await ensureAccounts(spec, { ...options, book });
     } else if (config.action === "preset") {
-      if (!presetCredentials) throw new Error(`${spec.name} publishes no credentials`);
+      if (!presetCredentials) throw new ConfigError(`${spec.name} publishes no credentials`);
       // The one case where several browsers share a login on purpose: these
       // sites have exactly one demo account, so an account each is not on
       // offer. Said out loud rather than assumed.
@@ -638,7 +639,7 @@ export async function runBot(config: BotConfig, ctx: JobContext): Promise<JobRes
         { ...options, allowSharedLogin: true }
       );
     } else {
-      if (!book) throw new Error("Signing in needs an account book, or a credential list");
+      if (!book) throw new ConfigError("Signing in needs an account book, or a credential list");
       results = await signInAll(spec, { ...options, book });
     }
 
@@ -824,7 +825,7 @@ export async function runEnumerate(config: EnumerateConfig, ctx: JobContext): Pr
   // Catch it here so it reads like the rest of validation - but only when a
   // wordlist is actually in use, since `inputCmd` replaces it.
   if (wordlist && !fs.existsSync(wordlist)) {
-    throw new Error(`Wordlist not found: ${wordlist}`);
+    throw new ConfigError(`Wordlist not found: ${wordlist}`);
   }
 
   const store = config.store?.path

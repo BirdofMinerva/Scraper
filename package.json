@@ -1,11 +1,32 @@
 {
-  "name": "scraper",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "name": "@birdofminerva/scraper",
+  "version": "0.1.0",
+  "description": "Fingerprinted browsers, crawls, logins, proxy chains and ffuf enumeration — a composable web-scraping toolkit.",
+  "type": "commonjs",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "dashboard.html",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
+    "build": "tsup",
+    "prepublishOnly": "npm run build",
     "test": "npm run test:unit && npm run test:browser",
-    "test:unit": "node --import tsx --test test/browsers.test.ts test/storage.test.ts test/proxies.test.ts test/routes.test.ts test/detect.test.ts test/targets.test.ts test/accounts.test.ts test/login-sites.test.ts test/jobs.test.ts test/clean.test.ts test/actions.test.ts test/ffuf.test.ts",
+    "test:unit": "node --import tsx --test test/browsers.test.ts test/storage.test.ts test/proxies.test.ts test/routes.test.ts test/detect.test.ts test/targets.test.ts test/accounts.test.ts test/login-sites.test.ts test/jobs.test.ts test/clean.test.ts test/actions.test.ts test/ffuf.test.ts test/errors.test.ts test/index.test.ts",
     "test:browser": "node --import tsx --test --test-concurrency=1 test/missions.test.ts test/stack.test.ts test/stealth.test.ts test/crawl.test.ts test/turnstile.test.ts test/accounts-flow.test.ts test/server.test.ts",
     "test:field": "node --import tsx field-test.ts",
     "stack": "node --import tsx stack.ts",
@@ -13,14 +34,29 @@
     "enum": "node --import tsx enumerate.ts",
     "clean": "node --import tsx clean.ts"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "scraper",
+    "scraping",
+    "playwright",
+    "fingerprint",
+    "anti-bot",
+    "crawler",
+    "proxy",
+    "ffuf",
+    "automation",
+    "stealth"
+  ],
+  "author": "BirdOfMinerva",
   "license": "ISC",
-  "type": "commonjs",
+  "peerDependencies": {
+    "playwright": "^1.55.0"
+  },
   "devDependencies": {
-    "@playwright/test": "^1.62.1",
     "@types/node": "^26.4.0",
-    "tsx": "^4.23.12"
+    "playwright": "^1.62.1",
+    "tsup": "^8.5.1",
+    "tsx": "^4.23.12",
+    "typescript": "~5.6.3"
   },
   "dependencies": {
     "playwright-extra": "^4.3.6",

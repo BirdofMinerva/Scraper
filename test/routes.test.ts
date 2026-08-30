@@ -6,6 +6,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { parseRoutes, withDirect, selectRoutes, describeRoute } from "../routes";
+import { ConfigError } from "../errors";
 
 describe("parseRoutes", () => {
   test("a labelled single hop", () => {
@@ -112,5 +113,13 @@ describe("describeRoute", () => {
       describeRoute({ label: "c", proxy: [{ server: "http://a:8080" }, { server: "http://b:3128" }] }),
       "http://a:8080 -> http://b:3128"
     );
+  });
+});
+
+describe("typed errors", () => {
+  test("--only matching no routes is a ConfigError, message unchanged", () => {
+    const routes = parseRoutes("home=http://1.1.1.1:8080");
+    assert.throws(() => selectRoutes(routes, ["--only=nope"]), ConfigError);
+    assert.throws(() => selectRoutes(routes, ["--only=nope"]), /matched no routes/);
   });
 });

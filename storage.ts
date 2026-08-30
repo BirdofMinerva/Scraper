@@ -12,6 +12,7 @@
  * results in memory, and an interrupted one keeps what it already had.
  */
 import fs from "node:fs";
+import { StorageError } from "./errors";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -195,7 +196,7 @@ export function sqliteStore(options: SqliteOptions): Store {
         db.prepare("COMMIT").run();
       } catch (error) {
         db.prepare("ROLLBACK").run();
-        throw error;
+        throw new StorageError(error instanceof Error ? error.message : String(error), { cause: error });
       }
       return prepared.length;
     },
@@ -221,7 +222,7 @@ export function jsonlStore(file: string): Store {
       if (rows.length === 0) return 0;
       const text = rows.map((row) => JSON.stringify(withMeta(row, meta))).join("\n");
       await new Promise<void>((resolve, reject) =>
-        handle.write(text + "\n", (error) => (error ? reject(error) : resolve()))
+        handle.write(text + "\n", (error) => (error ? reject(new StorageError(error.message, { cause: error })) : resolve()))
       );
       return rows.length;
     },
@@ -252,7 +253,7 @@ export function csvStore(file: string, columns?: string[]): Store {
 
   const write = (line: string) =>
     new Promise<void>((resolve, reject) =>
-      handle.write(line + "\n", (error) => (error ? reject(error) : resolve()))
+      handle.write(line + "\n", (error) => (error ? reject(new StorageError(error.message, { cause: error })) : resolve()))
     );
 
   return {

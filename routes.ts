@@ -6,6 +6,7 @@
  * becoming "direct" would quietly invalidate a whole run's conclusions.
  */
 import type { ProxyLike, ProxyHop } from "./proxies";
+import { ConfigError } from "./errors";
 
 export type Route = { label: string; proxy?: ProxyLike };
 
@@ -57,7 +58,7 @@ export function selectRoutes(routes: Route[], argv: string[]): Route[] {
   const wanted = flag.slice("--only=".length).split(",").map((s) => s.trim()).filter(Boolean);
   const chosen = routes.filter((r) => wanted.includes(r.label));
   if (chosen.length === 0) {
-    throw new Error(
+    throw new ConfigError(
       `--only matched no routes. Available: ${routes.map((r) => r.label).join(", ")}`
     );
   }

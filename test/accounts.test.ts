@@ -14,6 +14,8 @@ import {
   SCRAPINGCOURSE,
   type Account,
 } from "../accounts";
+import { defineSite, signInEach } from "../accounts";
+import { ConfigError } from "../errors";
 
 const book = () => accountBook({ path: ":memory:" });
 
@@ -181,5 +183,13 @@ describe("the shipped site", () => {
     // otherwise would send every run at a 404.
     assert.match(SCRAPINGCOURSE.loginUrl, /^https:\/\/www\.scrapingcourse\.com\/login$/);
     assert.equal(SCRAPINGCOURSE.signupUrl, undefined);
+  });
+});
+
+describe("typed errors", () => {
+  test("too few credentials for the browser count is a ConfigError, before any launch", async () => {
+    const spec = defineSite({ name: "demo", loginUrl: "https://demo.example/login" });
+    await assert.rejects(() => signInEach(spec, [], { count: 1 }), ConfigError);
+    await assert.rejects(() => signInEach(spec, [], { count: 1 }), /credentials/);
   });
 });

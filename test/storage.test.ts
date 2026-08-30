@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { StorageError } from "../errors";
 import {
   toRows, sqliteStore, jsonlStore, csvStore, memoryStore, multiStore, customStore,
 } from "../storage";
@@ -175,5 +176,14 @@ describe("composition", () => {
     await store.close();
     assert.equal(seen[0]._profile, "desktop-chrome");
     assert.ok(closed);
+  });
+});
+
+describe("typed errors", () => {
+  test("StorageError carries the storage code and is an Error", () => {
+    const e = new StorageError("disk full");
+    assert.ok(e instanceof Error);
+    assert.equal(e.code, "STORAGE");
+    assert.equal(e.name, "StorageError");
   });
 });

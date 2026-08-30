@@ -9,6 +9,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { parseActions, describeAction, shotName, ACTION_KINDS, type Action } from "../actions";
+import { ConfigError } from "../errors";
 
 describe("parsing what the form sends", () => {
   test("a full list survives the round trip", () => {
@@ -144,5 +145,13 @@ describe("screenshot filenames", () => {
     // Ten screenshots listed alphabetically otherwise put 10 before 2.
     assert.match(shotName("p", 2), /-02\./);
     assert.match(shotName("p", 10), /-10\./);
+  });
+});
+
+describe("typed errors", () => {
+  test("a broken action list is a ConfigError, message unchanged", () => {
+    assert.throws(() => parseActions([{ do: "dance" }]), ConfigError);
+    assert.throws(() => parseActions([{ do: "dance" }]), /not something a browser can do/);
+    assert.throws(() => parseActions("nope"), ConfigError);
   });
 });

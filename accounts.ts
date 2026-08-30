@@ -21,6 +21,7 @@
  * unless something checks.
  */
 import type { Locator, Page } from "playwright";
+import { ConfigError, ChallengeError } from "./errors";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID, randomInt } from "node:crypto";
 import path from "node:path";
@@ -432,7 +433,7 @@ async function settle(page: Page, options: AuthOptions): Promise<boolean> {
   });
   if (outcome.challenged) {
     options.log?.(outcome.detail);
-    if (!outcome.passed) throw new Error(`challenge not passed: ${outcome.detail}`);
+    if (!outcome.passed) throw new ChallengeError(`challenge not passed: ${outcome.detail}`);
   }
   return outcome.challenged;
 }
@@ -991,7 +992,7 @@ export async function signInEach(
 ): Promise<AccountRunResult[]> {
   const count = options.count ?? credentials.length;
   if (credentials.length < count) {
-    throw new Error(
+    throw new ConfigError(
       `${count} browsers but only ${credentials.length} credentials. ` +
         `Two browsers sharing a login is the correlation this avoids - add credentials or lower count.`
     );
@@ -1004,7 +1005,7 @@ export async function signInEach(
   const identifiers = queue.map((c) => (c.email ?? c.username ?? "").toLowerCase());
   const repeated = identifiers.find((id, i) => identifiers.indexOf(id) !== i);
   if (repeated && !options.allowSharedLogin) {
-    throw new Error(
+    throw new ConfigError(
       `"${repeated}" appears twice in the credential list - two browsers would share it. ` +
         `Pass allowSharedLogin if that is deliberate, as it is for a site with one published demo account.`
     );

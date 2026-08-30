@@ -21,6 +21,8 @@ import {
   type ScrapeConfig,
   type EnumerateConfig,
 } from "../jobs";
+import { ScraperError, ConfigError, FfufError } from "../errors";
+import { buildFfufArgs, parseFfufJson } from "../ffuf";
 
 const scrape = (over: Partial<ScrapeConfig> = {}): ScrapeConfig => ({
   mode: "scrape",
@@ -493,5 +495,55 @@ describe("enumerate brute-force inputs and richer sources", () => {
     assert.equal(o.recursion, undefined);
     assert.equal(o.inputCmd, undefined);
     assert.equal(o.threads, undefined);
+  });
+});
+
+
+describe("typed errors", () => {
+  test("the taxonomy: subclasses are Errors, carry a code, and keep their name", () => {
+    const e = new ConfigError("bad");
+    assert.ok(e instanceof Error);
+    assert.ok(e instanceof ScraperError);
+    assert.ok(e instanceof ConfigError);
+    assert.equal(e.name, "ConfigError");
+    assert.equal(e.code, "CONFIG");
+    assert.equal(e.message, "bad");
+  });
+
+  test("the cause is threaded through", () => {
+    const root = new Error("root");
+    const e = new FfufError("wrapped", { cause: root });
+    assert.equal(e.code, "FFUF");
+    assert.equal(e.cause, root);
+  });
+
+  test("a failed scrape validation is a ConfigError, message unchanged", () => {
+    assert.throws(() => validate(scrape({ rowSelector: "" })), ConfigError);
+    assert.throws(() => validate(scrape({ rowSelector: "" })), /selector for the repeating row/);
+  });
+
+  test("a failed enumerate validation is a ConfigError", () => {
+    assert.throws(() => validate(enumerate({ wordlist: undefined })), ConfigError);
+    assert.throws(() => validate(enumerate({ wordlist: undefined })), /wordlist path, or an input command/);
+  });
+
+  test("startUrls refuses a non-URL with a ConfigError", () => {
+    assert.throws(() => startUrls(scrape({ urls: ["not a url"] })), ConfigError);
+  });
+
+  test("ffuf buildFfufArgs config problems are ConfigError, message unchanged", () => {
+    assert.throws(() => buildFfufArgs("https://x", "path", {} as any), ConfigError);
+    assert.throws(() => buildFfufArgs("https://x", "path", {} as any), /needs an input source/);
+    assert.throws(
+      () => buildFfufArgs("https://x", "subdomain", { wordlist: "w", recursion: true }),
+      ConfigError
+    );
+  });
+
+  test("ffuf output-parse failures are FfufError, message unchanged", () => {
+    assert.throws(() => parseFfufJson("{not json"), FfufError);
+    assert.throws(() => parseFfufJson("{not json"), /valid JSON/);
+    assert.throws(() => parseFfufJson('{"results": 5}'), FfufError);
+    assert.throws(() => parseFfufJson('{"results": 5}'), /non-array/);
   });
 });

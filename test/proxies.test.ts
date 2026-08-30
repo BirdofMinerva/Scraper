@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import net from "node:net";
 import { resolveProxy, startProxyChain, proxyPool, describeProxy, withProxy } from "../proxies";
+import { ProxyError } from "../errors";
 
 /** A CONNECT proxy that records what it was asked to reach. */
 function testProxy(auth?: string) {
@@ -206,5 +207,12 @@ describe("helpers", () => {
       s.once("connect", () => { s.destroy(); resolve(null); });
       s.once("error", reject);
     }));
+  });
+});
+
+describe("typed errors", () => {
+  test("an empty proxy pool is a ProxyError, message unchanged", () => {
+    assert.throws(() => proxyPool([]), ProxyError);
+    assert.throws(() => proxyPool([]), /pool is empty/);
   });
 });

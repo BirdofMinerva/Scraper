@@ -20,6 +20,7 @@
  * two.
  */
 import type { Page } from "playwright";
+import { ConfigError, ChallengeError } from "./errors";
 import path from "node:path";
 import fs from "node:fs";
 import { humanize, type Human } from "./human";
@@ -113,26 +114,26 @@ export function describeAction(action: Action): string {
  */
 export function parseActions(input: unknown): Action[] {
   if (input === undefined || input === null) return [];
-  if (!Array.isArray(input)) throw new Error("Actions must be a list");
+  if (!Array.isArray(input)) throw new ConfigError("Actions must be a list");
 
   return input.map((raw, index) => {
     const at = `step ${index + 1}`;
     const action = raw as Partial<Action> & { do?: string };
     const kind = action.do as ActionKind;
     if (!ACTION_KINDS.includes(kind)) {
-      throw new Error(`${at}: "${action.do ?? "nothing"}" is not something a browser can do`);
+      throw new ConfigError(`${at}: "${action.do ?? "nothing"}" is not something a browser can do`);
     }
 
     const need = (value: unknown, what: string) => {
       const text = typeof value === "string" ? value.trim() : "";
-      if (!text) throw new Error(`${at}: ${kind} needs ${what}`);
+      if (!text) throw new ConfigError(`${at}: ${kind} needs ${what}`);
       return text;
     };
 
     switch (kind) {
       case "visit": {
         const url = need((action as { url?: string }).url, "a URL");
-        if (!/^https?:\/\//i.test(url)) throw new Error(`${at}: "${url.slice(0, 40)}" is not a URL`);
+        if (!/^https?:\/\//i.test(url)) throw new ConfigError(`${at}: "${url.slice(0, 40)}" is not a URL`);
         return { do: "visit", url, optional: !!action.optional };
       }
       case "click":
@@ -153,7 +154,7 @@ export function parseActions(input: unknown): Action[] {
       case "wait": {
         const selector = (action as { selector?: string }).selector?.trim();
         const ms = positive((action as { ms?: number }).ms);
-        if (!selector && !ms) throw new Error(`${at}: wait needs a selector or a number of milliseconds`);
+        if (!selector && !ms) throw new ConfigError(`${at}: wait needs a selector or a number of milliseconds`);
         return { do: "wait", selector: selector || undefined, ms, optional: !!action.optional };
       }
       case "read":
@@ -218,7 +219,7 @@ export async function runActions(
     });
     if (outcome.challenged) {
       log(outcome.detail);
-      if (!outcome.passed) throw new Error(`challenge not passed: ${outcome.detail}`);
+      if (!outcome.passed) throw new ChallengeError(`challenge not passed: ${outcome.detail}`);
     }
   };
 

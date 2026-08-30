@@ -18,6 +18,7 @@
  * no authorisation check in this file; that responsibility is the caller's.
  */
 import { spawn } from "node:child_process";
+import { ConfigError, FfufError } from "./errors";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -98,7 +99,7 @@ export function shapeFfufUrl(url: string, mode: FfufMode): string {
   if (url.includes("FUZZ")) return url;
   if (mode === "subdomain") {
     const domain = bareDomain(url);
-    if (!domain) throw new Error(`ffuf subdomain mode needs a domain, got "${url}"`);
+    if (!domain) throw new ConfigError(`ffuf subdomain mode needs a domain, got "${url}"`);
     return `https://FUZZ.${domain}/`;
   }
   // path mode: collapse any trailing slashes so we never emit `host//FUZZ`.
@@ -127,7 +128,7 @@ export function buildFfufArgs(url: string, mode: FfufMode, opts: FfufOptions): s
   const hasWordlist = !!opts?.wordlist && opts.wordlist.trim() !== "";
   const hasInputCmd = !!opts?.inputCmd && opts.inputCmd.trim() !== "";
   if (!hasWordlist && !hasInputCmd) {
-    throw new Error("ffuf needs an input source: a wordlist (opts.wordlist) or opts.inputCmd");
+    throw new ConfigError("ffuf needs an input source: a wordlist (opts.wordlist) or opts.inputCmd");
   }
 
   // recursion needs the URL to end in FUZZ. Path mode's shaped URL does
@@ -136,7 +137,7 @@ export function buildFfufArgs(url: string, mode: FfufMode, opts: FfufOptions): s
   // know is broken.
   const wantsRecursion = opts.recursion === true || opts.recursionDepth != null;
   if (wantsRecursion && mode === "subdomain") {
-    throw new Error(
+    throw new ConfigError(
       "ffuf recursion requires the URL to end in FUZZ, which subdomain mode does not — recursion is path-mode only",
     );
   }
@@ -213,13 +214,13 @@ export function parseFfufJson(raw: string): FfufResult[] {
   try {
     doc = JSON.parse(raw);
   } catch (err) {
-    throw new Error(`ffuf JSON output was not valid JSON: ${(err as Error).message}`);
+    throw new FfufError(`ffuf JSON output was not valid JSON: ${(err as Error).message}`);
   }
 
   const results = (doc as { results?: unknown } | null)?.results;
   if (results == null) return []; // no matches, or `"results": null`
   if (!Array.isArray(results)) {
-    throw new Error("ffuf JSON output had a non-array `results` field");
+    throw new FfufError("ffuf JSON output had a non-array `results` field");
   }
 
   return results.map((entry) => flattenResult(entry as RawFfufResult));
@@ -397,7 +398,7 @@ export async function runFfuf(url: string, mode: FfufMode, opts: FfufOptions): P
       if (settled) return;
       settled = true;
       cleanup();
-      reject(new Error(`ffuf failed to start ("${FFUF_BIN}"): ${err.message}`));
+      reject(new FfufError(`ffuf failed to start ("${FFUF_BIN}"): ${err.message}`));
     });
 
     child.on("close", async (code, sig) => {
@@ -406,7 +407,7 @@ export async function runFfuf(url: string, mode: FfufMode, opts: FfufOptions): P
 
       if (timedOut) {
         cleanup();
-        return reject(new Error(`ffuf timed out after ${timeoutMs}ms`));
+        return reject(new FfufError(`ffuf timed out after ${timeoutMs}ms`));
       }
       if (opts.signal?.aborted) {
         cleanup();
@@ -432,7 +433,7 @@ export async function runFfuf(url: string, mode: FfufMode, opts: FfufOptions): P
 
       if (code !== 0 && !raw) {
         const tail = stderr.trim().split("\n").slice(-3).join(" ").slice(0, 300);
-        return reject(new Error(`ffuf exited ${code}${sig ? ` (${sig})` : ""}: ${tail || "no output"}`));
+        return reject(new FfufError(`ffuf exited ${code}${sig ? ` (${sig})` : ""}: ${tail || "no output"}`));
       }
 
       try {

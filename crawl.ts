@@ -20,6 +20,7 @@
  * shared throttle is a denial of service, not a scrape.
  */
 import type { Page } from "playwright";
+import { ConfigError, ChallengeError } from "./errors";
 import { openStack, type StackKind, type StackSession } from "./stack";
 import { launchProfile } from "./browsers";
 import { toRows, type Row, type Store } from "./storage";
@@ -250,7 +251,7 @@ export async function crawl<T = unknown>(
     verbose = false,
   } = options;
 
-  if (start.length === 0) throw new Error("crawl needs at least one start URL");
+  if (start.length === 0) throw new ConfigError("crawl needs at least one start URL");
 
   const began = Date.now();
   const queue = new WorkQueue(start);
@@ -370,7 +371,7 @@ export async function crawl<T = unknown>(
                 timeout: Math.min(timeout, 30_000),
                 ...challenge,
               });
-              if (!outcome.passed) throw new Error(`challenge not passed: ${outcome.detail}`);
+              if (!outcome.passed) throw new ChallengeError(`challenge not passed: ${outcome.detail}`);
               if (outcome.challenged && verbose) console.log(`  ${profile} ⚑ ${outcome.detail}`);
             }
             const value = await extract({
