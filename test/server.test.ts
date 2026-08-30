@@ -11,6 +11,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../server";
 import { ensureDisplay } from "../browsers";
+import { DEFAULT_MATCH_STATUS, DEFAULT_THREADS, DEFAULT_RATE, DEFAULT_INPUT_NUM } from "../ffuf";
 
 const MINUTE = 60_000;
 
@@ -108,6 +109,16 @@ describe("the HTTP surface", { timeout: MINUTE }, () => {
     assert.equal(options.profiles.length, 30);
     assert.ok(options.presets.some((p: any) => p.name === "saucedemo"));
     assert.deepEqual(options.kinds[0], "mixed");
+  });
+
+  test("options carry the ffuf engine defaults, so the enumerate form need not hardcode them", async () => {
+    // Single source of truth: the served defaults ARE ffuf.ts's exported consts,
+    // so the dashboard placeholders cannot drift from the engine.
+    const options = await (await fetch(base + "/api/options")).json();
+    assert.equal(options.ffufDefaults.matchStatus, DEFAULT_MATCH_STATUS);
+    assert.equal(options.ffufDefaults.threads, DEFAULT_THREADS);
+    assert.equal(options.ffufDefaults.rate, DEFAULT_RATE);
+    assert.equal(options.ffufDefaults.inputNum, DEFAULT_INPUT_NUM);
   });
 
   test("a bad config is refused with a message a person can act on", async () => {

@@ -52,6 +52,11 @@ function parseArgs(argv: string[]) {
     filterStatus: get("filter") ?? get("fc"),
     filterSize: get("fs"),
     filterWords: get("fw"),
+    extensions: get("extensions") ?? get("e"),
+    recursion: argv.includes("--recursion"),
+    recursionDepth: number("recursion-depth"),
+    inputCmd: get("input-cmd"),
+    inputNum: number("input-num"),
     json: argv.includes("--json"),
   };
 }
@@ -62,13 +67,18 @@ const USAGE = `enumerate - ffuf subdomain and path discovery
 
   --mode=subdomain|path   subdomain fuzzes FUZZ.<domain>, path fuzzes <url>/FUZZ
                           (inferred from the target when omitted)
-  --wordlist=<file>       required
+  --wordlist=<file>       required, unless --input-cmd is given
   --threads=<n>           concurrent requests (ffuf default 40)
   --rate=<n>              requests per second (ffuf default 100)
   --match=<codes>         only keep these statuses, e.g. 200,301
   --filter=<codes>        drop these statuses, e.g. 404
   --fs=<size>             drop responses of this byte size
   --fw=<words>            drop responses with this many words
+  --extensions=<list>     append extensions, e.g. .php,.html,.bak
+  --recursion             recurse into discovered directories (path mode only)
+  --recursion-depth=<n>   how deep to recurse
+  --input-cmd=<cmd>       generate candidates from a command (replaces --wordlist)
+  --input-num=<n>         how many candidates the command yields (default 100)
   --timeout=<ms>          overall process timeout (ffuf default 120000)
   --json                  print raw JSON instead of a table
 
@@ -88,12 +98,16 @@ if (require.main === module) {
       console.error(`Unknown --mode=${args.mode}. Use subdomain or path.`);
       process.exit(1);
     }
-    if (!args.wordlist) {
-      console.error("A --wordlist=<file> is required.");
+    if (!args.wordlist && !args.inputCmd) {
+      console.error("A --wordlist=<file> is required (or --input-cmd=<cmd> to generate candidates).");
       process.exit(1);
     }
-    if (!fs.existsSync(args.wordlist)) {
+    if (args.wordlist && !fs.existsSync(args.wordlist)) {
       console.error(`Wordlist not found: ${args.wordlist}`);
+      process.exit(1);
+    }
+    if (args.recursion && args.mode === "subdomain") {
+      console.error("Recursion only applies to path fuzzing, not subdomain enumeration.");
       process.exit(1);
     }
     if (args.mode === "path" && !/^https?:\/\//i.test(args.target)) {
@@ -117,10 +131,16 @@ if (require.main === module) {
       filterStatus: args.filterStatus,
       filterSize: args.filterSize,
       filterWords: args.filterWords,
+      extensions: args.extensions,
+      recursion: args.recursion || undefined,
+      recursionDepth: args.recursionDepth,
+      inputCmd: args.inputCmd,
+      inputNum: args.inputNum,
     };
 
     const label = args.mode === "subdomain" ? "subdomains" : "paths";
-    console.error(`${args.mode} enumeration of ${args.target} with ${args.wordlist}…`);
+    const source = args.inputCmd ? `input-cmd "${args.inputCmd}"` : args.wordlist;
+    console.error(`${args.mode} enumeration of ${args.target} with ${source}…`);
 
     const hits: FfufResult[] =
       args.mode === "subdomain"

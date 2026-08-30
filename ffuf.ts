@@ -29,6 +29,15 @@ export const FFUF_BIN = process.env.FFUF_BIN || "ffuf";
 /** ffuf's default `-mc`, spelled out so callers can see (and override) it. */
 export const DEFAULT_MATCH_STATUS = "200,204,301,302,307,401,403,405,500";
 
+/** Safe default concurrency (`-t`). One source of truth, served to the UI. */
+export const DEFAULT_THREADS = 40;
+
+/** Safe default request rate (`-rate`, req/s) — capped, not unlimited. */
+export const DEFAULT_RATE = 100;
+
+/** Default number of inputs pulled from `-input-cmd` when none is given. */
+export const DEFAULT_INPUT_NUM = 100;
+
 /** One matched hit, flattened from ffuf's JSON result object. */
 export type FfufResult = {
   input: string; // the FUZZ value that matched
@@ -44,14 +53,19 @@ export type FfufResult = {
 };
 
 export type FfufOptions = {
-  wordlist: string; // path to wordlist file (required)
-  threads?: number; // -t, default 40
-  rate?: number; // -rate req/s; defaults to a safe 100, not unlimited
+  wordlist?: string; // path to wordlist file (-w); required UNLESS inputCmd is set
+  threads?: number; // -t, default DEFAULT_THREADS
+  rate?: number; // -rate req/s; defaults to a safe DEFAULT_RATE, not unlimited
   timeoutMs?: number; // overall process timeout, default 120000
   matchStatus?: string; // -mc, default DEFAULT_MATCH_STATUS
   filterStatus?: string; // -fc
   filterSize?: string | number; // -fs
   filterWords?: string | number; // -fw
+  extensions?: string; // -e comma list, e.g. ".php,.html,.bak" (added only when non-empty)
+  recursion?: boolean; // -recursion (path mode only — the URL must end in FUZZ)
+  recursionDepth?: number; // -recursion-depth <n>; implies -recursion
+  inputCmd?: string; // -input-cmd <cmd>; OVERRIDES -w (no wordlist is passed)
+  inputNum?: number; // -input-num <n> for input-cmd, default DEFAULT_INPUT_NUM
   headers?: Record<string, string>; // -H "Key: Value"
   signal?: AbortSignal; // cooperative cancellation
   extraArgs?: string[]; // escape hatch, appended verbatim
@@ -110,15 +124,39 @@ function bareDomain(input: string): string {
  * needs is here and therefore unit-testable.
  */
 export function buildFfufArgs(url: string, mode: FfufMode, opts: FfufOptions): string[] {
-  if (!opts || !opts.wordlist || !opts.wordlist.trim()) {
-    throw new Error("ffuf needs a wordlist (opts.wordlist)");
+  const hasWordlist = !!opts?.wordlist && opts.wordlist.trim() !== "";
+  const hasInputCmd = !!opts?.inputCmd && opts.inputCmd.trim() !== "";
+  if (!hasWordlist && !hasInputCmd) {
+    throw new Error("ffuf needs an input source: a wordlist (opts.wordlist) or opts.inputCmd");
   }
 
-  const args: string[] = [
-    "-w", opts.wordlist,
-    "-u", shapeFfufUrl(url, mode),
-    "-of", "json",
-  ];
+  // recursion needs the URL to end in FUZZ. Path mode's shaped URL does
+  // (`<base>/FUZZ`); subdomain mode's does not (`https://FUZZ.<domain>/`), so
+  // ffuf would exit with an error. Refuse loudly rather than emit a command we
+  // know is broken.
+  const wantsRecursion = opts.recursion === true || opts.recursionDepth != null;
+  if (wantsRecursion && mode === "subdomain") {
+    throw new Error(
+      "ffuf recursion requires the URL to end in FUZZ, which subdomain mode does not — recursion is path-mode only",
+    );
+  }
+
+  const args: string[] = [];
+  /** Push `flag value` only when value is present and non-empty (0 counts). */
+  const pushFlag = (flag: string, value: unknown) => {
+    if (value != null && String(value) !== "") args.push(flag, String(value));
+  };
+
+  // Input source: `-input-cmd` overrides `-w`, so they are mutually exclusive.
+  // When both are given, input-cmd wins and no wordlist is passed.
+  if (hasInputCmd) {
+    args.push("-input-cmd", opts.inputCmd!.trim());
+    args.push("-input-num", String(opts.inputNum ?? DEFAULT_INPUT_NUM));
+  } else {
+    args.push("-w", opts.wordlist!);
+  }
+
+  args.push("-u", shapeFfufUrl(url, mode), "-of", "json");
 
   // Silent (bare match values only, no banner/progress) UNLESS streaming:
   // onResult is driven by the full result lines ffuf prints live, which `-s`
@@ -127,19 +165,20 @@ export function buildFfufArgs(url: string, mode: FfufMode, opts: FfufOptions): s
   // truth for the returned array either way.
   if (!opts.onResult) args.push("-s");
 
-  args.push("-t", String(opts.threads ?? 40));
-  args.push("-rate", String(opts.rate ?? 100));
+  args.push("-t", String(opts.threads ?? DEFAULT_THREADS));
+  args.push("-rate", String(opts.rate ?? DEFAULT_RATE));
   args.push("-mc", opts.matchStatus ?? DEFAULT_MATCH_STATUS);
 
-  if (opts.filterStatus != null && String(opts.filterStatus) !== "") {
-    args.push("-fc", String(opts.filterStatus));
+  pushFlag("-fc", opts.filterStatus);
+  pushFlag("-fs", opts.filterSize);
+  pushFlag("-fw", opts.filterWords);
+  pushFlag("-e", opts.extensions);
+
+  if (wantsRecursion) {
+    args.push("-recursion");
+    if (opts.recursionDepth != null) args.push("-recursion-depth", String(opts.recursionDepth));
   }
-  if (opts.filterSize != null && String(opts.filterSize) !== "") {
-    args.push("-fs", String(opts.filterSize));
-  }
-  if (opts.filterWords != null && String(opts.filterWords) !== "") {
-    args.push("-fw", String(opts.filterWords));
-  }
+
   for (const [key, value] of Object.entries(opts.headers ?? {})) {
     args.push("-H", `${key}: ${value}`);
   }
@@ -361,7 +400,7 @@ export async function runFfuf(url: string, mode: FfufMode, opts: FfufOptions): P
       reject(new Error(`ffuf failed to start ("${FFUF_BIN}"): ${err.message}`));
     });
 
-    child.on("close", (code, sig) => {
+    child.on("close", async (code, sig) => {
       if (settled) return;
       settled = true;
 
@@ -380,10 +419,12 @@ export async function runFfuf(url: string, mode: FfufMode, opts: FfufOptions): P
         stdoutBuf = "";
       }
 
-      // Read the output before cleanup unlinks it.
+      // Read the output off the event loop, before cleanup unlinks it. A
+      // missing/empty file (a run that matched nothing, or wrote none) is
+      // tolerated as raw = "" — same as the old sync read.
       let raw = "";
       try {
-        raw = fs.readFileSync(outFile, "utf8");
+        raw = await fs.promises.readFile(outFile, "utf8");
       } catch {
         raw = "";
       }

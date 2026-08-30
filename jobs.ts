@@ -179,8 +179,8 @@ export type EnumerateConfig = {
   target: string;
   /** Which of the two `ffuf` shapes to run. */
   enumMode: "subdomain" | "path";
-  /** Path to the wordlist file `ffuf` reads. */
-  wordlist: string;
+  /** Path to the wordlist file `ffuf` reads. Optional when `inputCmd` is set. */
+  wordlist?: string;
   threads?: number;
   rate?: number;
   timeoutMs?: number;
@@ -192,6 +192,16 @@ export type EnumerateConfig = {
   filterSize?: string | number;
   /** Drop responses with this many words. */
   filterWords?: string | number;
+  /** Extensions to append to each candidate, `ffuf -e`, e.g. `.php,.html,.bak`. */
+  extensions?: string;
+  /** Recurse into discovered directories, `ffuf -recursion`. Path mode only. */
+  recursion?: boolean;
+  /** How deep to recurse, `ffuf -recursion-depth`; implies recursion. */
+  recursionDepth?: number;
+  /** A command that generates candidates, `ffuf -input-cmd`. Overrides `wordlist`. */
+  inputCmd?: string;
+  /** How many candidates `inputCmd` yields, `ffuf -input-num`. */
+  inputNum?: number;
   store?: { path: string; table: string };
 };
 
@@ -402,7 +412,28 @@ export function validate(config: JobConfig): void {
     if (config.enumMode === "subdomain" && /^https?:\/\//i.test(target)) {
       throw new Error("Subdomain fuzzing takes a bare domain, e.g. example.com - drop the scheme");
     }
-    if (!config.wordlist?.trim()) throw new Error("Give a wordlist path");
+    // A wordlist or an input command - ffuf needs one source of candidates, and
+    // `inputCmd` overrides the wordlist, so either alone is enough.
+    const hasWordlist = !!config.wordlist?.trim();
+    const hasInputCmd = !!config.inputCmd?.trim();
+    if (!hasWordlist && !hasInputCmd) {
+      throw new Error("Give a wordlist path, or an input command to generate candidates");
+    }
+    if (hasInputCmd) {
+      if (config.inputNum === undefined) {
+        throw new Error("An input command needs an input count - how many candidates it yields");
+      }
+      if (!Number.isInteger(config.inputNum) || config.inputNum < 1) {
+        throw new Error("The input count must be a positive whole number");
+      }
+    }
+    // Recursion walks into discovered directories, which only exists for paths.
+    if (config.recursion && config.enumMode === "subdomain") {
+      throw new Error("Recursion only applies to path fuzzing, not subdomain enumeration");
+    }
+    if (config.recursionDepth !== undefined && config.recursionDepth < 1) {
+      throw new Error("Recursion depth must be at least 1");
+    }
     if (config.threads !== undefined && config.threads < 1) throw new Error("At least one thread");
     if (config.rate !== undefined && config.rate < 0) throw new Error("Rate cannot be negative");
     return;
@@ -741,6 +772,34 @@ export function enumerateResult(hits: FfufResult[], noun: string, stopped = fals
 }
 
 /**
+ * The `ffuf` options an enumerate config asks for - everything except the
+ * `signal` and `onResult` a live run wires in.
+ *
+ * Pure, so the passthrough of the brute-force inputs (extensions, recursion,
+ * input-cmd) can be checked without spawning anything. Only what the user set
+ * is included: ffuf fills the rest from its own defaults, so an unset field is
+ * left `undefined` rather than second-guessed here. `inputCmd` overrides the
+ * wordlist in ffuf, so a config using it carries no `wordlist` at all.
+ */
+export function ffufOptionsFrom(config: EnumerateConfig): FfufOptions {
+  return {
+    wordlist: config.wordlist?.trim() || undefined,
+    threads: config.threads,
+    rate: config.rate,
+    timeoutMs: config.timeoutMs,
+    matchStatus: config.matchStatus?.trim() || undefined,
+    filterStatus: config.filterStatus?.trim() || undefined,
+    filterSize: config.filterSize,
+    filterWords: config.filterWords,
+    extensions: config.extensions?.trim() || undefined,
+    recursion: config.recursion || undefined,
+    recursionDepth: config.recursionDepth,
+    inputCmd: config.inputCmd?.trim() || undefined,
+    inputNum: config.inputNum,
+  };
+}
+
+/**
  * Run `ffuf` against a target and report what answered.
  *
  * `ffuf.ts` is reached with a dynamic import rather than a top-level one so
@@ -758,11 +817,13 @@ export async function runEnumerate(config: EnumerateConfig, ctx: JobContext): Pr
   validate(config);
 
   const target = config.target.trim();
-  const wordlist = config.wordlist.trim();
+  const wordlist = config.wordlist?.trim() || undefined;
+  const inputCmd = config.inputCmd?.trim() || undefined;
   // A wordlist that is not there is the commonest way this run dies, and it
   // dies seconds in with a message about a file rather than about the config.
-  // Catch it here so it reads like the rest of validation.
-  if (!fs.existsSync(wordlist)) {
+  // Catch it here so it reads like the rest of validation - but only when a
+  // wordlist is actually in use, since `inputCmd` replaces it.
+  if (wordlist && !fs.existsSync(wordlist)) {
     throw new Error(`Wordlist not found: ${wordlist}`);
   }
 
@@ -789,14 +850,7 @@ export async function runEnumerate(config: EnumerateConfig, ctx: JobContext): Pr
   const writes: Promise<unknown>[] = [];
 
   const options: FfufOptions = {
-    wordlist,
-    threads: config.threads,
-    rate: config.rate,
-    timeoutMs: config.timeoutMs,
-    matchStatus: config.matchStatus?.trim() || undefined,
-    filterStatus: config.filterStatus?.trim() || undefined,
-    filterSize: config.filterSize,
-    filterWords: config.filterWords,
+    ...ffufOptionsFrom(config),
     signal: controller.signal,
     onResult: (hit) => {
       streamed.push(hit);
@@ -819,7 +873,9 @@ export async function runEnumerate(config: EnumerateConfig, ctx: JobContext): Pr
   ctx.log("step", `${config.enumMode} enumeration of ${target}`);
   ctx.log(
     "info",
-    `wordlist ${wordlist}` +
+    (inputCmd ? `input-cmd (${config.inputNum} candidates)` : `wordlist ${wordlist}`) +
+      (options.extensions ? `, ext ${options.extensions}` : "") +
+      (config.recursion ? `, recursion${config.recursionDepth ? ` depth ${config.recursionDepth}` : ""}` : "") +
       (config.threads ? `, ${config.threads} threads` : "") +
       (config.rate ? `, ${config.rate}/s` : "") +
       (options.matchStatus ? `, match ${options.matchStatus}` : "") +

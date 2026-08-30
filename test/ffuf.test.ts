@@ -15,6 +15,9 @@ import {
   fuzzPaths,
   enumerateSubdomains,
   DEFAULT_MATCH_STATUS,
+  DEFAULT_THREADS,
+  DEFAULT_RATE,
+  DEFAULT_INPUT_NUM,
   type FfufOptions,
   type FfufResult,
 } from "../ffuf";
@@ -169,10 +172,11 @@ describe("buildFfufArgs", () => {
     assert.equal(flag(args, "-u"), "https://FUZZ.example.com/");
   });
 
-  test("a missing wordlist throws rather than building a broken run", () => {
-    assert.throws(() => buildFfufArgs("https://site.com", "path", { wordlist: "" }), /wordlist/);
-    // @ts-expect-error deliberately omitting the required field
-    assert.throws(() => buildFfufArgs("https://site.com", "path", {}), /wordlist/);
+  test("no input source (neither wordlist nor inputCmd) throws", () => {
+    assert.throws(() => buildFfufArgs("https://site.com", "path", { wordlist: "" }), /input source|wordlist/);
+    assert.throws(() => buildFfufArgs("https://site.com", "path", {}), /input source|wordlist/);
+    // blank inputCmd is not a source either
+    assert.throws(() => buildFfufArgs("https://site.com", "path", { inputCmd: "  " }), /input source|wordlist/);
   });
 
   test("without onResult, -s stays (behaviour unchanged from before streaming)", () => {
@@ -183,6 +187,83 @@ describe("buildFfufArgs", () => {
     const args = buildFfufArgs("https://site.com", "path", { wordlist: wl, onResult: () => {} });
     assert.ok(!args.includes("-s"), "streaming needs the live lines -s would suppress");
     assert.equal(flag(args, "-of"), "json"); // the JSON file is still the source of truth
+  });
+
+  test("the exported defaults are the ones actually applied", () => {
+    const args = buildFfufArgs("https://site.com", "path", base);
+    assert.equal(flag(args, "-t"), String(DEFAULT_THREADS));
+    assert.equal(flag(args, "-rate"), String(DEFAULT_RATE));
+    assert.equal(flag(args, "-mc"), DEFAULT_MATCH_STATUS);
+  });
+});
+
+describe("buildFfufArgs — brute-force / richer inputs", () => {
+  test("REGRESSION: with none of the new fields set, the arg vector is byte-for-byte unchanged", () => {
+    // The exact vector the pre-Bucket-B code produced for a plain wordlist run.
+    assert.deepEqual(buildFfufArgs("https://site.com", "path", { wordlist: wl }), [
+      "-w", wl,
+      "-u", "https://site.com/FUZZ",
+      "-of", "json",
+      "-s",
+      "-t", "40",
+      "-rate", "100",
+      "-mc", DEFAULT_MATCH_STATUS,
+    ]);
+  });
+
+  test("extensions map to -e only when non-empty", () => {
+    const args = buildFfufArgs("https://site.com", "path", { wordlist: wl, extensions: ".php,.html,.bak" });
+    assert.equal(flag(args, "-e"), ".php,.html,.bak");
+    assert.ok(!buildFfufArgs("https://site.com", "path", { wordlist: wl, extensions: "" }).includes("-e"));
+    assert.ok(!buildFfufArgs("https://site.com", "path", { wordlist: wl }).includes("-e"));
+  });
+
+  test("recursion adds -recursion; depth adds -recursion-depth and implies -recursion", () => {
+    const r = buildFfufArgs("https://site.com", "path", { wordlist: wl, recursion: true });
+    assert.ok(r.includes("-recursion"));
+    assert.ok(!r.includes("-recursion-depth"));
+
+    const d = buildFfufArgs("https://site.com", "path", { wordlist: wl, recursionDepth: 2 });
+    assert.ok(d.includes("-recursion"), "depth alone still turns recursion on");
+    assert.equal(flag(d, "-recursion-depth"), "2");
+
+    assert.ok(!buildFfufArgs("https://site.com", "path", { wordlist: wl }).includes("-recursion"));
+  });
+
+  test("recursion is refused in subdomain mode (URL does not end in FUZZ)", () => {
+    assert.throws(
+      () => buildFfufArgs("example.com", "subdomain", { wordlist: wl, recursion: true }),
+      /recursion.*path-mode only|end in FUZZ/,
+    );
+    assert.throws(
+      () => buildFfufArgs("example.com", "subdomain", { wordlist: wl, recursionDepth: 3 }),
+      /recursion.*path-mode only|end in FUZZ/,
+    );
+    // but it is fine in path mode
+    assert.doesNotThrow(() => buildFfufArgs("example.com", "path", { wordlist: wl, recursion: true }));
+  });
+
+  test("inputCmd sets -input-cmd/-input-num and omits -w (it overrides the wordlist)", () => {
+    const args = buildFfufArgs("https://site.com", "path", { inputCmd: "seq 1 100" });
+    assert.equal(flag(args, "-input-cmd"), "seq 1 100");
+    assert.equal(flag(args, "-input-num"), String(DEFAULT_INPUT_NUM)); // default 100
+    assert.ok(!args.includes("-w"), "input-cmd overrides -w, so no wordlist is passed");
+  });
+
+  test("inputNum overrides the default input count", () => {
+    const args = buildFfufArgs("https://site.com", "path", { inputCmd: "seq 1 5", inputNum: 5 });
+    assert.equal(flag(args, "-input-num"), "5");
+  });
+
+  test("inputCmd wins even when a wordlist is also supplied", () => {
+    const args = buildFfufArgs("https://site.com", "path", { wordlist: wl, inputCmd: "seq 1 9" });
+    assert.equal(flag(args, "-input-cmd"), "seq 1 9");
+    assert.ok(!args.includes("-w"), "input-cmd overrides -w");
+  });
+
+  test("either wordlist OR inputCmd satisfies the input-source requirement", () => {
+    assert.doesNotThrow(() => buildFfufArgs("https://site.com", "path", { wordlist: wl }));
+    assert.doesNotThrow(() => buildFfufArgs("https://site.com", "path", { inputCmd: "seq 1 3" }));
   });
 });
 

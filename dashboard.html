@@ -341,19 +341,43 @@
       <fieldset>
         <legend>ffuf</legend>
         <div class="row">
-          <label>threads <input name="threads" type="number" min="1" placeholder="40"></label>
-          <label>rate /s <input name="rate" type="number" min="0" placeholder="100"></label>
+          <label>threads <input name="threads" type="number" min="1"></label>
+          <label>rate /s <input name="rate" type="number" min="0"></label>
           <label>timeout ms <input name="enumTimeout" type="number" min="1000" placeholder="120000"></label>
         </div>
         <label>Match status
-          <input name="matchStatus" placeholder="200,204,301,302,307,401,403,405,500">
+          <input name="matchStatus">
         </label>
         <div class="row">
           <label>filter status <input name="filterStatus" placeholder="e.g. 404"></label>
           <label>filter size <input name="filterSize" placeholder="e.g. 4242"></label>
           <label>filter words <input name="filterWords" placeholder="e.g. 12"></label>
         </div>
-        <span class="hint">Blank fields take ffuf's defaults. Filtering by size is the usual way past a wildcard that answers everything the same way.</span>
+        <span class="hint">Blank fields take ffuf's defaults (shown as placeholders). Filtering by size is the usual way past a wildcard that answers everything the same way.</span>
+      </fieldset>
+
+      <fieldset>
+        <legend>Brute force</legend>
+        <label>Extensions
+          <span class="hint">Comma list appended to each candidate. Path mode.</span>
+          <input name="extensions" placeholder=".php,.html,.bak">
+        </label>
+        <label class="check"><input type="checkbox" name="recursion"> Recurse into discovered directories <span class="hint" style="display:inline;color:var(--faint)">— path mode only</span></label>
+        <label>Recursion depth
+          <span class="hint">How deep to recurse. Blank is ffuf's default.</span>
+          <input name="recursionDepth" type="number" min="1" placeholder="e.g. 2">
+        </label>
+        <details style="margin-top:6px">
+          <summary style="cursor:pointer;color:var(--dim);font-size:12px">Advanced — generate candidates from a command</summary>
+          <label style="margin-top:8px">Input command
+            <span class="hint">Runs a command for candidates instead of a wordlist — this replaces the wordlist above.</span>
+            <input name="inputCmd" placeholder="e.g. seq 1 1000">
+          </label>
+          <label>Input count
+            <span class="hint">How many lines the command yields.</span>
+            <input name="inputNum" type="number" min="1">
+          </label>
+        </details>
       </fieldset>
 
       <fieldset>
@@ -707,7 +731,7 @@
         mode: "enumerate",
         target: value("enumTarget"),
         enumMode: value("enumKind"),
-        wordlist: value("wordlist"),
+        wordlist: value("wordlist") || undefined,
         threads: num("threads"),
         rate: num("rate"),
         timeoutMs: num("enumTimeout"),
@@ -715,6 +739,11 @@
         filterStatus: value("filterStatus") || undefined,
         filterSize: value("filterSize") || undefined,
         filterWords: value("filterWords") || undefined,
+        extensions: value("extensions") || undefined,
+        recursion: form.elements.recursion.checked || undefined,
+        recursionDepth: num("recursionDepth"),
+        inputCmd: value("inputCmd") || undefined,
+        inputNum: num("inputNum"),
         store: value("enumStorePath")
           ? { path: value("enumStorePath"), table: value("enumStoreTable") || "hits" }
           : undefined,
@@ -931,6 +960,15 @@
     presets.forEach(function (preset) {
       form.elements.preset.appendChild(new Option(preset.name, preset.name));
     });
+    // The enumerate placeholders are the ffuf engine's own defaults, served by
+    // /api/options, so they never drift from a second copy hardcoded here.
+    if (options.ffufDefaults) {
+      var fd = options.ffufDefaults;
+      if (form.elements.threads) form.elements.threads.placeholder = String(fd.threads);
+      if (form.elements.rate) form.elements.rate.placeholder = String(fd.rate);
+      if (form.elements.matchStatus) form.elements.matchStatus.placeholder = fd.matchStatus;
+      if (form.elements.inputNum) form.elements.inputNum.placeholder = String(fd.inputNum);
+    }
     if (!restore()) {
       form.elements.kind.value = "mixed";
       form.elements.botKind.value = "desktop";

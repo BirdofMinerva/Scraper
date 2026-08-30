@@ -16,6 +16,7 @@ import {
   seedUrlsFrom,
   SEED_URL_CAP,
   enumerateResult,
+  ffufOptionsFrom,
   type BotConfig,
   type ScrapeConfig,
   type EnumerateConfig,
@@ -431,5 +432,66 @@ describe("enumerate result shaping (streaming + partial-on-stop)", () => {
     );
     assert.equal(r.rows![0].contentType, "text/html");
     assert.equal(r.rows![1].contentType, null);
+  });
+});
+
+
+describe("enumerate brute-force inputs and richer sources", () => {
+  test("a wordlist alone is still enough", () => {
+    validate(enumerate());
+  });
+
+  test("an input command with a count, and no wordlist, is accepted", () => {
+    // inputCmd overrides the wordlist in ffuf, so it stands in for one.
+    validate(enumerate({ wordlist: undefined, inputCmd: "seq 1 500", inputNum: 500 }));
+  });
+
+  test("an input command with no count is refused", () => {
+    assert.throws(() => validate(enumerate({ wordlist: undefined, inputCmd: "seq 1 500" })), /input count/);
+  });
+
+  test("the input count must be a positive whole number", () => {
+    assert.throws(() => validate(enumerate({ wordlist: undefined, inputCmd: "x", inputNum: 0 })), /positive whole number/);
+    assert.throws(() => validate(enumerate({ wordlist: undefined, inputCmd: "x", inputNum: 2.5 })), /positive whole number/);
+  });
+
+  test("neither a wordlist nor an input command is refused", () => {
+    assert.throws(() => validate(enumerate({ wordlist: undefined })), /wordlist path, or an input command/);
+  });
+
+  test("recursion is path mode only", () => {
+    assert.throws(() => validate(enumerate({ enumMode: "subdomain", recursion: true })), /only applies to path/);
+    validate(enumerate({ enumMode: "path", target: "https://x/", recursion: true, recursionDepth: 3 }));
+  });
+
+  test("a recursion depth below 1 is refused", () => {
+    assert.throws(
+      () => validate(enumerate({ enumMode: "path", target: "https://x/", recursionDepth: 0 })),
+      /depth must be at least 1/
+    );
+  });
+
+  test("the brute-force inputs pass through to the ffuf options shape", () => {
+    const o = ffufOptionsFrom(
+      enumerate({ enumMode: "path", target: "https://x/", extensions: " .php,.bak ", recursion: true, recursionDepth: 2 })
+    );
+    assert.equal(o.extensions, ".php,.bak"); // trimmed
+    assert.equal(o.recursion, true);
+    assert.equal(o.recursionDepth, 2);
+  });
+
+  test("input-cmd passes through and the wordlist collapses to undefined", () => {
+    const o = ffufOptionsFrom(enumerate({ wordlist: undefined, inputCmd: "seq 1 9", inputNum: 9 }));
+    assert.equal(o.inputCmd, "seq 1 9");
+    assert.equal(o.inputNum, 9);
+    assert.equal(o.wordlist, undefined);
+  });
+
+  test("only what the user set is included - unset knobs stay undefined", () => {
+    const o = ffufOptionsFrom(enumerate());
+    assert.equal(o.extensions, undefined);
+    assert.equal(o.recursion, undefined);
+    assert.equal(o.inputCmd, undefined);
+    assert.equal(o.threads, undefined);
   });
 });

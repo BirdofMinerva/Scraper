@@ -24,6 +24,7 @@ import { runJob, type JobConfig, type JobResult, type LogLevel } from "./jobs";
 import { LOGIN_SITES } from "./login-sites";
 import { PROFILES } from "./browsers";
 import { accountBook } from "./accounts";
+import { DEFAULT_MATCH_STATUS, DEFAULT_THREADS, DEFAULT_RATE, DEFAULT_INPUT_NUM } from "./ffuf";
 
 const DASHBOARD = path.join(__dirname, "dashboard.html");
 /** Screenshots a bot run takes, one directory per run. */
@@ -259,6 +260,15 @@ export function createServer(store = createRuns()) {
             note: s.note,
             hasCredentials: true,
           })),
+          // The ffuf engine's own defaults, so the enumerate form shows the real
+          // values as placeholders and they cannot drift from ffuf.ts - the same
+          // "the UI never carries a second copy" reason as the catalogue above.
+          ffufDefaults: {
+            matchStatus: DEFAULT_MATCH_STATUS,
+            threads: DEFAULT_THREADS,
+            rate: DEFAULT_RATE,
+            inputNum: DEFAULT_INPUT_NUM,
+          },
         });
       }
 

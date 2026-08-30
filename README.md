@@ -1044,6 +1044,29 @@ A stop is therefore not a silent truncation — the caller decides what a partia
 run means, and the dashboard keeps the hits found so far rather than discarding
 them.
 
+### Beyond a flat wordlist
+
+ffuf has no charset engine of its own — it fuzzes a *stream of candidates*, and
+a plain wordlist is just the common source. Three options widen that:
+
+```ts
+// try each word with several extensions: admin, admin.php, admin.bak, …
+await fuzzPaths(base, { wordlist, extensions: ".php,.bak,.old" });
+
+// walk discovered directories, not just the top level (path mode only)
+await fuzzPaths(base, { wordlist, recursion: true, recursionDepth: 2 });
+
+// no wordlist at all: brute-force from a generator
+await fuzzPaths(base, { inputCmd: "crunch 4 4 abcdefghijklmnop", inputNum: 456976 });
+```
+
+`inputCmd` is how you brute-force with ffuf: it runs a command (`crunch`, `seq`,
+anything that prints candidates) and fuzzes its output, so `wordlist` is
+optional when it is set. `extensions` maps to `-e`, `recursion` to
+`-recursion`. Recursion needs the keyword at the end of the URL, which only path
+mode gives — asking for it in subdomain mode throws rather than handing ffuf a
+command it would reject.
+
 ### enumerate.ts
 
 The same thing from a terminal:
@@ -1055,9 +1078,11 @@ npx tsx enumerate.ts https://example.com/ --wordlist=common.txt --match=200,301
 
 `--mode` is inferred from the target when omitted — a bare domain enumerates
 subdomains, a URL fuzzes paths. `--threads`, `--rate`, `--match`, `--filter`,
-`--fs`, `--fw` and `--timeout` map onto the options above; `--json` prints the
-raw results instead of a table. Results go to stdout and the status line to
-stderr, so it pipes cleanly.
+`--fs`, `--fw` and `--timeout` map onto the options above, as do
+`--extensions`, `--recursion` / `--recursion-depth`, and `--input-cmd` /
+`--input-num` (with `--input-cmd`, `--wordlist` is no longer required). `--json`
+prints the raw results instead of a table. Results go to stdout and the status
+line to stderr, so it pipes cleanly.
 
 ---
 
@@ -1125,9 +1150,11 @@ usual knobs: threads, rate, which statuses to match or filter, and an optional
 SQLite file to write hits to. The ffuf defaults show as placeholders, so you
 can see what you get before you touch anything.
 
-Hits appear in the results table as ffuf finds them, not all at once when it
-finishes, and **Stop** keeps what was found so far rather than throwing the run
-away. Because most discovered URLs are the named pages a crawl wants to start
+Extensions, a recursion toggle with a depth, and — under an **Advanced**
+disclosure — an input-command for brute-forcing without a wordlist sit
+alongside the basics. Hits appear in the results table as ffuf finds them, not
+all at once when it finishes, and **Stop** keeps what was found so far rather
+than throwing the run away. Because most discovered URLs are the named pages a crawl wants to start
 from, a finished run offers a one-click **use the discovered URLs as scrape
 seeds** — it switches to Scrape mode with the URLs already filled in.
 
@@ -1424,7 +1451,7 @@ npm run clean -- --list   # what data is on disk; --handoff clears it
 npx tsx login-test.ts  # sign in to nine real practice sites, both ways
 ```
 
-383 tests on `node:test`, no framework dependency. 285 of them are pure logic
+402 tests on `node:test`, no framework dependency. 304 of them are pure logic
 (`browsers`, `storage`, `proxies`, `routes`, `detect`, `targets`, `accounts`,
 `login-sites`, `jobs`, `clean`, `actions`, `ffuf`) and run in about a second;
 the rest launch real browsers and take roughly eleven minutes.
