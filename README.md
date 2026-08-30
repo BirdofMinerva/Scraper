@@ -9,7 +9,7 @@ to drive by hand, `turnstile.ts` gets a page through a Cloudflare interstitial,
 does once it is in. `ffuf.ts` enumerates a target's subdomains and paths from
 a wordlist — the named URLs, not just numbered ones, that a crawl then works
 through — and `enumerate.ts` is its command line. `human.ts` holds the timing
-and pointer behaviour the rest of them share, `login-sites.ts` is nine real
+and pointer behaviour the rest of them share, `login-sites.ts` is nine practice
 login forms to check `accounts.ts` against, `server.ts` puts a dashboard
 in front of the lot — `npm run dash` — and `clean.ts` clears the databases
 again when the project changes hands.
@@ -1358,8 +1358,8 @@ allows it when it is deliberate.
 `ipinfo.io` first and reports what each one comes out as:
 
 ```
-home: 203.0.113.x · ASxxxxx a residential ISP
-vps:  198.51.100.x · ASxxxxx a host
+home: 203.0.113.x · AS64500 Example ISP · residential
+vps:  198.51.100.x · AS64501 Example Hosting · datacenter
 b:    203.0.113.x - same exit as home, so those browsers share an IP
 ```
 
@@ -1598,7 +1598,7 @@ npm run test:browser  # the browser-backed files, serially
 npm run test:field  # probe detection pages and report
 npm run dash        # the dashboard on http://127.0.0.1:8420
 npm run clean -- --list   # what data is on disk; --handoff clears it
-npx tsx login-test.ts  # sign in to nine real practice sites, both ways
+npx tsx login-test.ts  # sign in to nine practice sites, both ways
 ```
 
 457 tests on `node:test`, no framework dependency. 357 of them are pure logic
@@ -1829,8 +1829,8 @@ for chromium and firefox profiles.
 #### Live sites: datacenter IP vs residential
 
 Same profile (`desktop-chrome`), same script, two routes. `direct` is a
-a region VPS (ASxxxxx a host); `home` is a reverse SSH SOCKS tunnel out through
-a consumer line in a city (ASxxxxx a residential ISP). 2026-08-29:
+datacenter VPS; `home` is a reverse SSH SOCKS tunnel out through a residential
+line. 2026-08-29:
 
 ```
 site              direct                        home
@@ -1872,8 +1872,8 @@ was wrong.
 
 #### The g2 case, settled
 
-g2.com refused every attempt: from the a region VPS, from the a city
-residential line, before and after the stealth work. The verdict said
+g2.com refused every attempt: from the datacenter VPS, from the residential
+line, before and after the stealth work. The verdict said
 `js-blocked` — vendor JS ran and rejected the browser — so the obvious reading
 was that the fingerprint was the problem.
 

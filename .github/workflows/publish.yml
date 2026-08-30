@@ -1,16 +1,12 @@
 name: Publish to npm
 
-# Publishes @birdofminerva/scraper to the public npm registry.
+# Publishes @birdofminerva/scraper on a pushed v*.*.* tag (or a manual run).
+# Gates on the unit tests, then publishes with provenance.
 #
-# Runs when you push a version tag (e.g. `git tag v0.1.1 && git push --tags`),
-# or when triggered by hand from the Actions tab. It gates on the unit tests,
-# then publishes with npm provenance so the release is cryptographically linked
-# back to this repo and commit.
-#
-# One-time setup: create a *granular access token* on npmjs.com with "Bypass
-# 2FA" and read+write to this package, then add it to the repo as a secret
-# named NPM_TOKEN (Settings -> Secrets and variables -> Actions). The token is
-# what lets CI publish without an interactive 2FA prompt.
+# Auth is OIDC "trusted publishing" — no long-lived token, nothing to bypass.
+# One-time setup: in the package's settings on npmjs.com, add this repo and
+# this workflow file as a trusted publisher. GitHub then mints a short-lived
+# identity per run and npm accepts it; there is no secret to store.
 
 on:
   push:
@@ -23,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # required for npm provenance
+      id-token: write # OIDC identity for trusted publishing + provenance
     steps:
       - uses: actions/checkout@v4
 
@@ -38,9 +34,11 @@ jobs:
       - name: Unit tests (gate)
         run: npm run test:unit
 
-      # `prepublishOnly` builds dist/ before the upload; provenance needs a
-      # public repo and the `repository` field in package.json (both present).
+      # A recent npm is what negotiates the OIDC exchange with the registry.
+      - name: Use latest npm
+        run: npm install -g npm@latest
+
+      # `prepublishOnly` builds dist/ first. No NODE_AUTH_TOKEN: publishing is
+      # authorised by the OIDC identity above via the trusted-publisher config.
       - name: Publish
         run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
