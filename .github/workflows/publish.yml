@@ -1,0 +1,46 @@
+name: Publish to npm
+
+# Publishes @birdofminerva/scraper to the public npm registry.
+#
+# Runs when you push a version tag (e.g. `git tag v0.1.1 && git push --tags`),
+# or when triggered by hand from the Actions tab. It gates on the unit tests,
+# then publishes with npm provenance so the release is cryptographically linked
+# back to this repo and commit.
+#
+# One-time setup: create a *granular access token* on npmjs.com with "Bypass
+# 2FA" and read+write to this package, then add it to the repo as a secret
+# named NPM_TOKEN (Settings -> Secrets and variables -> Actions). The token is
+# what lets CI publish without an interactive 2FA prompt.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required for npm provenance
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24" # stable node:sqlite; matches the dev engine
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests (gate)
+        run: npm run test:unit
+
+      # `prepublishOnly` builds dist/ before the upload; provenance needs a
+      # public repo and the `repository` field in package.json (both present).
+      - name: Publish
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

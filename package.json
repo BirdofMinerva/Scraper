@@ -48,6 +48,14 @@
   ],
   "author": "BirdOfMinerva",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BirdofMinerva/Scraper.git"
+  },
+  "bugs": {
+    "url": "https://github.com/BirdofMinerva/Scraper/issues"
+  },
+  "homepage": "https://github.com/BirdofMinerva/Scraper#readme",
   "peerDependencies": {
     "playwright": "^1.55.0"
   },
