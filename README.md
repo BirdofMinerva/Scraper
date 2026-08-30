@@ -1795,7 +1795,7 @@ That test caught three leaks no value check would:
 
 The JS surface was not the whole story. Every chromium profile was sending a
 **bare `Accept-Language: en-US`** on the main navigation request - no q-values.
-Real Chrome always sends a weighted list, `en-US,de;q=0.9,en-US;q=0.8,en;q=0.7`.
+Real Chrome always sends a weighted list, `en-US,en;q=0.9`.
 
 It survived every earlier check because it is only the *first* request:
 Playwright's `locale` option wins over `extraHTTPHeaders` on the navigation and
@@ -1805,9 +1805,9 @@ navigation is the one request an anti-bot service reads before deciding.
 Measured, desktop-edge (`en-US`), header on the first request:
 
 ```
-extraHTTPHeaders in newContext     "en-US"                              wrong
-setExtraHTTPHeaders after create   "en-US"                              wrong
-no locale, header only             "en-US,de;q=0.9,en-US;q=0.8,en;q=0.7"  correct
+extraHTTPHeaders in newContext     "en-US"            wrong
+setExtraHTTPHeaders after create   "en-US"            wrong
+no locale, header only             "en-US,en;q=0.9"   correct
 ```
 
 The fix is native rather than patched, which matters given that patching is
@@ -1817,9 +1817,9 @@ what the fingerprinting engines score. Chromium now launches with
 | approach | header | navigator.language | Intl |
 | --- | --- | --- | --- |
 | `locale` (before) | bare `en-US` | en-US | en-US |
-| `--accept-lang` + `LANG` | weighted, correct | en-US | de |
+| `--accept-lang` + `LANG` | weighted, correct | en-US | en |
 
-Number formatting comes out US-locale either way (`1234.5` → `1.234,5`). Firefox
+Number formatting comes out US-locale either way (`1234.5` → `1,234.5`). Firefox
 and WebKit honour `extraHTTPHeaders` on the first request, so they keep
 `locale` unchanged - this was a chromium-only bug.
 
@@ -2044,7 +2044,7 @@ hostnames it is asking for.
 
 Each varies GPU, core count, RAM, viewport, locale and timezone *together*, so
 they read as 30 different machines rather than one machine wearing 30 user
-agents. Locale and timezone are paired in one table (a `en-US` browser in
+agents. Locale and timezone are paired in one table (a `ja-JP` browser in
 `America/New_York` is a giveaway) and GPU strings come from another, so a
 Windows profile can never claim an Apple renderer.
 
